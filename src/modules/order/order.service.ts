@@ -106,7 +106,7 @@ export class OrderService {
         return { message: 'Ghi nhan thanh toan, khong phat hanh voucher.' };
       }
 
-      const campaign = await manager.findOne(VoucherCampaign, { where: { id: order.campaignId } });
+      const campaign = await manager.findOneOrFail(VoucherCampaign, { where: { id: order.campaignId } });
       const remaining = campaign.totalQuantity - campaign.soldQuantity;
 
       if (remaining < order.quantity) {

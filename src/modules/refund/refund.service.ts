@@ -35,7 +35,7 @@ export class RefundService {
     const eligibility = this.checkEligibility(item);
     if (!eligibility.eligible) {
       refund.status = RefundRequestStatus.REJECTED;
-      refund.rejectReason = eligibility.reason;
+      refund.rejectReason = eligibility.reason || 'Khong du dieu kien hoan tien.';
       refund.decidedAt = new Date();
       await this.refundRepo.save(refund);
       return refund;
@@ -103,7 +103,7 @@ export class RefundService {
     if (refund.status !== RefundRequestStatus.MANUAL_PENDING) {
       throw new BadRequestException('Yeu cau khong o trang thai cho xu ly thu cong.');
     }
-    const item = await this.voucherItemRepo.findOne({ where: { id: refund.voucherItemId } });
+    const item = await this.voucherItemRepo.findOneOrFail({ where: { id: refund.voucherItemId } });
     return this.processRefund(refund, item);
   }
 

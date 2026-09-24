@@ -1,0 +1,89 @@
+# Voucher Platform API (BE)
+
+Backend REST API cho "Nen tang ban va su dung voucher da thuong hieu" (multi-brand voucher
+platform). Xay dung bang **NestJS 10** + **TypeORM** + **PostgreSQL**, phuc vu ca 4 ung dung
+khach (React Native customer app, web thuong hieu, web cua hang, web quan tri) qua mot REST API
+duy nhat, xac thuc bang JWT.
+
+Day la ban **scaffold**: cau truc module, entity, DTO, guard va route da day du theo SRS; cac
+logic nghiep vu phuc tap (xac thuc chu ky HMAC webhook, tinh toan doi soat that su qua ngan hang,
+tich hop Firebase/SMTP that) duoc danh dau `// TODO` kem ma yeu cau SRS tuong ung de doi phat
+trien tiep trong 7 tuan.
+
+## Yeu cau moi truong
+
+- Node.js 20+
+- PostgreSQL 16 (hoac dung `docker-compose up`)
+
+## Cai dat va chay
+
+```bash
+npm install
+cp .env.example .env   # chinh sua thong tin DB/JWT/SMTP/payment gateway/Firebase
+npm run start:dev      # http://localhost:3000/api, Swagger tai /docs
+```
+
+Chay bang Docker (API + Postgres):
+
+```bash
+docker compose up --build
+```
+
+## Cau truc thu muc
+
+```
+src/
+  main.ts                  # bootstrap, Swagger, ValidationPipe, CORS
+  app.module.ts             # ghep tat ca module
+  common/
+    guards/                 # JwtAuthGuard, RolesGuard (phan quyen theo 5 vai tro)
+    decorators/              # @Roles(), @CurrentUser()
+    enums/                    # Role, cac trang thai vong doi (SRS muc 6)
+    filters/                  # chuan hoa loi tra ve (NFR-USA-02)
+  config/
+    typeorm.config.ts        # cau hinh ket noi PostgreSQL tu bien moi truong
+  entities/                  # 19 entity TypeORM day du theo SRS muc 7
+  modules/
+    auth/       # FR-AUTH-*   dang ky, OTP email, dang nhap mat khau, refresh, JWT strategy
+    brand/      # FR-BRAND-*  ho so thuong hieu, chi nhanh, nhan vien
+    campaign/   # FR-CAMP-*   CRUD chien dich, luong duyet, vong doi trang thai
+    search/     # FR-SEARCH-* danh muc, tim kiem, loc, "gan toi" (TODO tinh khoang cach)
+    order/      # FR-ORDER-*  tao don + giu ton kho TTL 15 phut, webhook thanh toan idempotent
+    redeem/     # FR-REDEEM-* sinh token QR/OTP (TTL 60s, HMAC), redeem co khoa ban ghi
+    refund/     # FR-REFUND-* yeu cau hoan tien tu dong xet duyet theo BR-05
+    settlement/ # FR-SETTLE-* cau hinh hoa hong, chot doi soat thang (Cron dau thang)
+    report/     # FR-REPORT-* bao cao thuong hieu, dashboard quan tri
+    engage/     # FR-ENGAGE-* danh gia, yeu thich, thong bao day (TODO Firebase)
+```
+
+## Quyet dinh ky thuat
+
+- **TypeORM** thay vi Prisma: idiomatic hon voi NestJS (`@nestjs/typeorm`), decorator-based entity
+  khop truc tiep voi bang thuc the trong SRS muc 7.
+- **Xac thuc**: JWT access token (15 phut) + refresh token (60 ngay) qua `@nestjs/jwt` +
+  `passport-jwt`. OTP hien luu tam trong bo nho (`Map`) trong `AuthService` — **TODO** thay bang
+  Redis/bang DB truoc khi len production nhieu instance.
+- **Phan quyen**: `RolesGuard` kiem tra o tang server cho moi endpoint (NFR-SEC-03), khong dua vao
+  an giao dien phia client.
+- **TTL giu cho ton kho / token QR**: doc tu bien moi truong (`ORDER_RESERVATION_TTL_MINUTES`,
+  `REDEEM_TOKEN_TTL_SECONDS`), khong hard-code (NFR-MNT-02).
+- **Webhook thanh toan**: idempotent theo `Payment.gatewayTxnId` (unique) — DC-04. Xac thuc chu ky
+  HMAC la `// TODO` (BR-18), can khoa bi mat that cua cong thanh toan sandbox duoc chon.
+- **Chong redeem trung**: dung `pessimistic_write` lock cua TypeORM tren `VoucherItem` trong
+  transaction (NFR-REL-03, BR-12).
+- **Swagger**: tu sinh tai `/docs` qua `@nestjs/swagger` (NFR-MNT-03).
+- **Lich chot doi soat**: `@nestjs/schedule` Cron chay dau moi thang (UC-05).
+
+## Bien moi truong quan trong
+
+Xem `.env.example` day du. Cac nhom chinh: `DB_*` (PostgreSQL), `JWT_*`, `OTP_*`,
+`PAYMENT_GATEWAY_*` (sandbox), `SMTP_*`, `FIREBASE_*`, `REDEEM_TOKEN_TTL_SECONDS`,
+`ORDER_RESERVATION_TTL_MINUTES`, `REFUND_WINDOW_DAYS`, `DEFAULT_COMMISSION_RATE`.
+
+## Cac TODO nghiep vu chinh con lai (xem comment trong code)
+
+- Xac thuc chu ky HMAC webhook thanh toan that su (BR-18) — `order.service.ts`.
+- Goi API hoan tien that cua cong sandbox + fallback thu cong (ASM-02) — `refund.service.ts`.
+- Tinh khoang cach "gan toi" (Haversine) trong `search.service.ts` (FR-SEARCH-05/06).
+- Gui email OTP that qua SMTP, gui push qua Firebase Admin SDK.
+- Ghi log kiem toan cho cac thao tac quan trong (NFR-SEC-07).
