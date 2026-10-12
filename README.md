@@ -74,6 +74,19 @@ src/
   transaction (NFR-REL-03, BR-12).
 - **Swagger**: tu sinh tai `/docs` qua `@nestjs/swagger` (NFR-MNT-03).
 - **Lich chot doi soat**: `@nestjs/schedule` Cron chay dau moi thang (UC-05).
+- **CORS**: `CORS_ORIGIN` mac dinh `http://localhost:5173`, khop lenh chay Flutter Web
+  `flutter run -d chrome --web-port 5173` cua repo Web_FE. App di dong khong bi CORS.
+
+## Endpoint bo sung cho client Flutter
+
+| Endpoint | Vai tro | Muc dich |
+|---|---|---|
+| `GET /wallet` | CUSTOMER | Vi voucher cua khach (khong tra secretKey) |
+| `GET /redeem/my-stores` | STORE_STAFF | Chi nhanh dang duoc gan de chon chi nhanh lam viec (FR-AUTH-12) |
+| `GET /brands/:id/staff` | BRAND_OWNER | Danh sach nhan vien theo chi nhanh (FR-BRAND-05) |
+| `GET /admin/commission-rate` | ADMIN | Ty le hoa hong hien tai (FR-SETTLE-01) |
+| `GET /admin/settlements` | ADMIN | Tat ca phieu doi soat kem ten thuong hieu (FR-SETTLE-07) |
+| `GET /refunds/manual-pending` | ADMIN | Yeu cau cho hoan tien thu cong (FR-REFUND-06) |
 
 ## Bien moi truong quan trong
 
@@ -88,3 +101,9 @@ Xem `.env.example` day du. Cac nhom chinh: `DB_*` (PostgreSQL), `JWT_*`, `OTP_*`
 - Tinh khoang cach "gan toi" (Haversine) trong `search.service.ts` (FR-SEARCH-05/06).
 - Gui email OTP that qua SMTP, gui push qua Firebase Admin SDK.
 - Ghi log kiem toan cho cac thao tac quan trong (NFR-SEC-07).
+- Kiem tra quyen so huu: cac endpoint nhan `:brandId` / `:id` (chien dich, chi nhanh, nhan vien, bao cao,
+  doi soat) chua kiem tra ban ghi co thuoc thuong hieu cua nguoi dang nhap (NFR-SEC-03, BR-19, DC-14).
+- Kiem tra chuyen trang thai chien dich: submit chi tu DRAFT va thuong hieu da duyet (BR-26),
+  approve/reject chi tu PENDING, sua sau khi duyet dua ve PENDING (BR-17).
+- Khoa nhap OTP redeem 15 phut sau 5 lan sai (FR-REDEEM-12); danh dau nonce da dung ca khi khong hop le (FR-REDEEM-13).
+- Chan vo hieu hoa chi nhanh ap dung cuoi cung cua chien dich con voucher ACTIVE (BR-24).
