@@ -28,6 +28,12 @@ export class RefundController {
   }
 
   @Roles(Role.ADMIN)
+  @Get('manual-pending')
+  manualPending() {
+    return this.refundService.findManualPending();
+  }
+
+  @Roles(Role.ADMIN)
   @Patch(':id/confirm-manual')
   confirmManual(@Param('id') id: string) {
     return this.refundService.confirmManualRefund(id);

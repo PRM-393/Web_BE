@@ -92,6 +92,15 @@ export class SettlementService {
     return createdSettlements;
   }
 
+  // FR-SETTLE-07: quan tri vien xem tat ca phieu doi soat de chi tra
+  async findAll() {
+    const settlements = await this.settlementRepo.find({
+      relations: ['brand'],
+      order: { periodStart: 'DESC' },
+    });
+    return settlements.map(({ brand, ...s }) => ({ ...s, brandName: brand?.name }));
+  }
+
   findByBrand(brandId: string) {
     return this.settlementRepo.find({ where: { brandId }, order: { periodStart: 'DESC' } });
   }

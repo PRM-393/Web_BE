@@ -86,6 +86,24 @@ export class BrandService {
     return this.staffRepo.save(assignment);
   }
 
+  // FR-BRAND-05: danh sach nhan vien theo cac chi nhanh cua thuong hieu (chi tra thong tin can hien thi)
+  async findStaff(brandId: string) {
+    const assignments = await this.staffRepo.find({
+      where: { store: { brandId } },
+      relations: ['user', 'store'],
+      order: { assignedAt: 'DESC' },
+    });
+    return assignments.map((a) => ({
+      id: a.id,
+      active: a.active,
+      assignedAt: a.assignedAt,
+      storeId: a.storeId,
+      storeName: a.store?.name,
+      email: a.user?.email,
+      fullName: a.user?.fullName,
+    }));
+  }
+
   // FR-BRAND-06: vo hieu hoa tai khoan nhan vien da nghi viec - TODO: thu hoi refresh token
   async deactivateStaff(assignmentId: string) {
     await this.staffRepo.update(assignmentId, { active: false });

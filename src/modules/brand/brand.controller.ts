@@ -67,6 +67,13 @@ export class BrandController {
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.BRAND_OWNER)
+  @Get(':id/staff')
+  listStaff(@Param('id') brandId: string) {
+    return this.brandService.findStaff(brandId);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.BRAND_OWNER)
   @Post('staff')
   assignStaff(@Body() dto: CreateStaffDto) {
     return this.brandService.assignStaff(dto);

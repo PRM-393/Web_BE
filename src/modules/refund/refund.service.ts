@@ -110,4 +110,12 @@ export class RefundService {
   findMyRequests(userId: string) {
     return this.refundRepo.find({ where: { userId }, order: { createdAt: 'DESC' } });
   }
+
+  // FR-REFUND-06: yeu cau dang cho quan tri vien xac nhan hoan tien thu cong
+  findManualPending() {
+    return this.refundRepo.find({
+      where: { status: RefundRequestStatus.MANUAL_PENDING },
+      order: { createdAt: 'ASC' },
+    });
+  }
 }

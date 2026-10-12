@@ -22,6 +22,18 @@ export class SettlementController {
   }
 
   @Roles(Role.ADMIN)
+  @Get('admin/commission-rate')
+  async getRate() {
+    return { rate: await this.settlementService.getCommissionRate() };
+  }
+
+  @Roles(Role.ADMIN)
+  @Get('admin/settlements')
+  findAll() {
+    return this.settlementService.findAll();
+  }
+
+  @Roles(Role.ADMIN)
   @Post('admin/settlements/run')
   run(@Body() body: { periodStart: string; periodEnd: string }) {
     return this.settlementService.runMonthlySettlement(
