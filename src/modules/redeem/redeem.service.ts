@@ -132,6 +132,15 @@ export class RedeemService {
     });
   }
 
+  // FR-AUTH-12: danh sach chi nhanh dang duoc gan (active) cho nhan vien
+  async findStaffStores(staffUserId: string) {
+    const assignments = await this.staffAssignmentRepo.find({
+      where: { userId: staffUserId, active: true },
+      relations: ['store'],
+    });
+    return assignments.map((a) => a.store);
+  }
+
   // FR-REDEEM-10
   findStaffHistoryToday(staffUserId: string) {
     const startOfDay = new Date();

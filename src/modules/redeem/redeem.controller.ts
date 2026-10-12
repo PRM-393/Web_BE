@@ -27,6 +27,13 @@ export class RedeemController {
     return this.redeemService.redeem(user.userId, dto);
   }
 
+  // FR-AUTH-12: chi nhanh nhan vien dang duoc gan, web cua hang dung de chon chi nhanh lam viec
+  @Roles(Role.STORE_STAFF)
+  @Get('my-stores')
+  myStores(@CurrentUser() user: CurrentUserPayload) {
+    return this.redeemService.findStaffStores(user.userId);
+  }
+
   @Roles(Role.STORE_STAFF)
   @Get('history/today')
   historyToday(@CurrentUser() user: CurrentUserPayload) {

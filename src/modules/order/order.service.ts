@@ -75,6 +75,16 @@ export class OrderService {
     return this.orderRepo.find({ where: { userId }, order: { createdAt: 'DESC' } });
   }
 
+  // FR-REDEEM-01: voucher cua khach kem thong tin chien dich; bo secretKey khoi response (NFR-SEC-05)
+  async findMyVouchers(userId: string) {
+    const items = await this.voucherItemRepo.find({
+      where: { userId },
+      relations: ['campaign'],
+      order: { issuedAt: 'DESC' },
+    });
+    return items.map(({ secretKey: _secretKey, ...rest }) => rest);
+  }
+
   // FR-ORDER-05/06/07/08, BR-18, DC-04, UC-01 buoc 6-9
   // TODO(NFR-SEC): xac thuc chu ky HMAC cua webhook truoc khi xu ly (BR-18) - hien tai la stub.
   async handlePaymentWebhook(dto: PaymentWebhookDto) {

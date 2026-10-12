@@ -2,7 +2,8 @@
 
 Backend REST API cho "Nen tang ban va su dung voucher da thuong hieu" (multi-brand voucher
 platform). Xay dung bang **NestJS 10** + **TypeORM** + **PostgreSQL**, phuc vu ca 4 ung dung
-khach (React Native customer app, web thuong hieu, web cua hang, web quan tri) qua mot REST API
+khach (app khach hang Flutter trong repo Mobile_App; web thuong hieu, web cua hang, web quan tri
+viet bang Flutter Web trong repo Web_FE) qua mot REST API
 duy nhat, xac thuc bang JWT.
 
 Day la ban **scaffold**: cau truc module, entity, DTO, guard va route da day du theo SRS; cac
