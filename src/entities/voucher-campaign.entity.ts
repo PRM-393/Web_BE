@@ -6,6 +6,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { DATETIME, timestampOptions } from '../config/db-types';
 import { Brand } from './brand.entity';
 import { CampaignStatus, VoucherType } from '../common/enums/status.enum';
 
@@ -62,13 +63,13 @@ export class VoucherCampaign {
   @Column({ type: 'int', default: 5 })
   limitPerUser: number;
 
-  @Column({ type: 'timestamptz' })
+  @Column({ type: DATETIME })
   saleStartAt: Date;
 
-  @Column({ type: 'timestamptz' })
+  @Column({ type: DATETIME })
   saleEndAt: Date;
 
-  @Column({ type: 'timestamptz' })
+  @Column({ type: DATETIME })
   voucherExpireAt: Date;
 
   @Column({ type: 'enum', enum: CampaignStatus, default: CampaignStatus.DRAFT })
@@ -77,6 +78,6 @@ export class VoucherCampaign {
   @Column({ nullable: true })
   rejectReason: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn(timestampOptions())
   createdAt: Date;
 }

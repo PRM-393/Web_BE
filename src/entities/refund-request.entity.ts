@@ -6,6 +6,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { DATETIME, timestampOptions } from '../config/db-types';
 import { VoucherItem } from './voucher-item.entity';
 import { User } from './user.entity';
 import { RefundRequestStatus } from '../common/enums/status.enum';
@@ -35,7 +36,7 @@ export class RefundRequest {
   @Column({ type: 'enum', enum: RefundRequestStatus, default: RefundRequestStatus.REQUESTED })
   status: RefundRequestStatus;
 
-  @Column({ type: 'timestamptz', nullable: true })
+  @Column({ type: DATETIME, nullable: true })
   decidedAt: Date;
 
   @Column({ nullable: true })
@@ -44,6 +45,6 @@ export class RefundRequest {
   @Column({ nullable: true })
   rejectReason: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn(timestampOptions())
   createdAt: Date;
 }

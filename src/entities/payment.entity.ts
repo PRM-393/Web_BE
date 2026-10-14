@@ -6,6 +6,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { JSON_COLUMN, timestampOptions } from '../config/db-types';
 import { Order } from './order.entity';
 import { PaymentStatus } from '../common/enums/status.enum';
 
@@ -35,9 +36,9 @@ export class Payment {
   status: PaymentStatus;
 
   // luu toan bo payload tho tu webhook de doi soat, khong ghi vao log (NFR-SEC-05)
-  @Column({ type: 'jsonb', nullable: true })
+  @Column({ type: JSON_COLUMN, nullable: true })
   rawPayload: Record<string, unknown>;
 
-  @CreateDateColumn()
+  @CreateDateColumn(timestampOptions())
   receivedAt: Date;
 }

@@ -5,6 +5,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { DOUBLE } from '../config/db-types';
 import { Brand } from './brand.entity';
 
 @Entity('stores')
@@ -26,10 +27,10 @@ export class Store {
   address: string;
 
   // DC-05: khong duoc rong khi chi nhanh dang hoat dong
-  @Column({ type: 'double precision', nullable: true })
+  @Column({ type: DOUBLE, nullable: true })
   latitude: number;
 
-  @Column({ type: 'double precision', nullable: true })
+  @Column({ type: DOUBLE, nullable: true })
   longitude: number;
 
   @Column({ nullable: true })

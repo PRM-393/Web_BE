@@ -6,6 +6,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { DATETIME, timestampOptions } from '../config/db-types';
 import { Brand } from './brand.entity';
 import { SettlementStatus } from '../common/enums/status.enum';
 
@@ -21,10 +22,10 @@ export class Settlement {
   @JoinColumn({ name: 'brandId' })
   brand: Brand;
 
-  @Column({ type: 'timestamptz' })
+  @Column({ type: DATETIME })
   periodStart: Date;
 
-  @Column({ type: 'timestamptz' })
+  @Column({ type: DATETIME })
   periodEnd: Date;
 
   @Column({ type: 'bigint' })
@@ -42,12 +43,12 @@ export class Settlement {
   @Column({ type: 'enum', enum: SettlementStatus, default: SettlementStatus.PENDING })
   status: SettlementStatus;
 
-  @Column({ type: 'timestamptz', nullable: true })
+  @Column({ type: DATETIME, nullable: true })
   paidAt: Date;
 
   @Column({ nullable: true })
   bankTxnRef: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn(timestampOptions())
   createdAt: Date;
 }

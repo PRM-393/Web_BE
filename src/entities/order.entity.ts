@@ -6,6 +6,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { DATETIME, timestampOptions } from '../config/db-types';
 import { User } from './user.entity';
 import { VoucherCampaign } from './voucher-campaign.entity';
 import { OrderStatus } from '../common/enums/status.enum';
@@ -42,12 +43,12 @@ export class Order {
   status: OrderStatus;
 
   // giu cho ton kho toi da 15 phut - FR-ORDER-03, BR-02
-  @Column({ type: 'timestamptz' })
+  @Column({ type: DATETIME })
   reservedUntil: Date;
 
-  @CreateDateColumn()
+  @CreateDateColumn(timestampOptions())
   createdAt: Date;
 
-  @Column({ type: 'timestamptz', nullable: true })
+  @Column({ type: DATETIME, nullable: true })
   paidAt: Date;
 }

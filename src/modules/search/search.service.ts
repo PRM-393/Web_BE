@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
 import { Category } from '../../entities/category.entity';
+import { Brand } from '../../entities/brand.entity';
 import { CampaignStatus } from '../../common/enums/status.enum';
 import { SearchVoucherDto, SortOption } from './dto/search-voucher.dto';
 
@@ -30,12 +31,18 @@ export class SearchService {
       .andWhere('c.saleEndAt >= :now2', { now2: new Date() });
 
     if (dto.categoryId) {
-      qb.andWhere('c.brandId IN (SELECT id FROM brands WHERE "categoryId" = :categoryId)', {
-        categoryId: dto.categoryId,
-      });
+      // Subquery qua entity de TypeORM tu dat ten cot dung cho PostgreSQL / MySQL
+      const brandsInCategory = qb
+        .subQuery()
+        .select('b.id')
+        .from(Brand, 'b')
+        .where('b.categoryId = :categoryId')
+        .getQuery();
+      qb.andWhere(`c.brandId IN ${brandsInCategory}`, { categoryId: dto.categoryId });
     }
     if (dto.keyword) {
-      qb.andWhere('(c.title ILIKE :kw)', { kw: `%${dto.keyword}%` });
+      // Khong phan biet hoa thuong tren ca PostgreSQL va MySQL (thay cho ILIKE chi co o PostgreSQL)
+      qb.andWhere('LOWER(c.title) LIKE :kw', { kw: `%${dto.keyword.toLowerCase()}%` });
     }
     if (dto.minPrice !== undefined) qb.andWhere('c.salePrice >= :minPrice', { minPrice: dto.minPrice });
     if (dto.maxPrice !== undefined) qb.andWhere('c.salePrice <= :maxPrice', { maxPrice: dto.maxPrice });

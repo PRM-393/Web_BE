@@ -1,4 +1,5 @@
 import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn } from 'typeorm';
+import { timestampOptions } from '../config/db-types';
 import { FavoriteTargetType } from '../common/enums/status.enum';
 
 @Entity('favorites')
@@ -15,6 +16,6 @@ export class Favorite {
   @Column()
   targetId: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn(timestampOptions())
   createdAt: Date;
 }

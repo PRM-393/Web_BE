@@ -6,6 +6,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { DATETIME, timestampOptions } from '../config/db-types';
 import { VoucherItem } from './voucher-item.entity';
 
 // Token QR dong: chuoi ky HMAC, hieu luc 60 giay, dung mot lan - FR-REDEEM-02, BR-06
@@ -29,12 +30,12 @@ export class RedeemToken {
   @Column()
   otpCode: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn(timestampOptions())
   issuedAt: Date;
 
-  @Column({ type: 'timestamptz' })
+  @Column({ type: DATETIME })
   expiresAt: Date;
 
-  @Column({ type: 'timestamptz', nullable: true })
+  @Column({ type: DATETIME, nullable: true })
   usedAt: Date;
 }

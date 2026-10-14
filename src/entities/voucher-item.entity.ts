@@ -7,6 +7,7 @@ import {
   PrimaryGeneratedColumn,
   VersionColumn,
 } from 'typeorm';
+import { DATETIME, timestampOptions } from '../config/db-types';
 import { Order } from './order.entity';
 import { VoucherCampaign } from './voucher-campaign.entity';
 import { User } from './user.entity';
@@ -49,13 +50,13 @@ export class VoucherItem {
   @Column({ type: 'enum', enum: VoucherItemStatus, default: VoucherItemStatus.ACTIVE })
   status: VoucherItemStatus;
 
-  @CreateDateColumn()
+  @CreateDateColumn(timestampOptions())
   issuedAt: Date;
 
-  @Column({ type: 'timestamptz', nullable: true })
+  @Column({ type: DATETIME, nullable: true })
   usedAt: Date;
 
-  @Column({ type: 'timestamptz' })
+  @Column({ type: DATETIME })
   expireAt: Date;
 
   // NFR-REL-03: khoa ghi tren ban ghi khi redeem de chong redeem trung (FR-REDEEM-11, BR-12)

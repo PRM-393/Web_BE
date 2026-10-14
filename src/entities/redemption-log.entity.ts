@@ -6,6 +6,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { timestampOptions } from '../config/db-types';
 import { VoucherItem } from './voucher-item.entity';
 import { Store } from './store.entity';
 import { User } from './user.entity';
@@ -41,7 +42,7 @@ export class RedemptionLog {
   @Column({ type: 'bigint', nullable: true })
   billAmount: number;
 
-  @CreateDateColumn()
+  @CreateDateColumn(timestampOptions())
   redeemedAt: Date;
 
   @Column({ type: 'enum', enum: RedeemMethod, default: RedeemMethod.QR })

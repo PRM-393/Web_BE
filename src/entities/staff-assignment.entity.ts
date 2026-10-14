@@ -6,6 +6,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { timestampOptions } from '../config/db-types';
 import { User } from './user.entity';
 import { Store } from './store.entity';
 
@@ -28,7 +29,7 @@ export class StaffAssignment {
   @JoinColumn({ name: 'storeId' })
   store: Store;
 
-  @CreateDateColumn()
+  @CreateDateColumn(timestampOptions())
   assignedAt: Date;
 
   @Column({ default: true })

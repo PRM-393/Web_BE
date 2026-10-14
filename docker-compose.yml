@@ -13,6 +13,20 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  # MySQL thay cho PostgreSQL: docker compose --profile mysql up -d mysql
+  mysql:
+    image: mysql:8.4
+    profiles: ["mysql"]
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-root}
+      MYSQL_DATABASE: ${DB_NAME:-voucher_platform}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysqldata:/var/lib/mysql
+
   api:
     build: .
     restart: unless-stopped
@@ -26,3 +40,4 @@ services:
 
 volumes:
   pgdata:
+  mysqldata:

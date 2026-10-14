@@ -6,6 +6,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { DATETIME, timestampOptions } from '../config/db-types';
 import { BrandStatus } from '../common/enums/status.enum';
 import { User } from './user.entity';
 import { Category } from './category.entity';
@@ -50,9 +51,9 @@ export class Brand {
   @Column({ nullable: true })
   rejectReason: string;
 
-  @Column({ nullable: true })
+  @Column({ type: DATETIME, nullable: true })
   approvedAt: Date;
 
-  @CreateDateColumn()
+  @CreateDateColumn(timestampOptions())
   createdAt: Date;
 }

@@ -14,13 +14,14 @@ trien tiep trong 7 tuan.
 ## Yeu cau moi truong
 
 - Node.js 20+
-- PostgreSQL 16 (hoac dung `docker-compose up`)
+- PostgreSQL 13+ (mac dinh) **hoac MySQL 8.0+** - chon bang `DB_TYPE` trong `.env`
 
 ## Cai dat va chay
 
 ```bash
 npm install
 cp .env.example .env   # chinh sua thong tin DB/JWT/SMTP/payment gateway/Firebase
+# tao bang + du lieu mau: xem database/README.md (PostgreSQL hoac MySQL)
 npm run start:dev      # http://localhost:3000/api, Swagger tai /docs
 ```
 

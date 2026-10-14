@@ -6,6 +6,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { timestampOptions } from '../config/db-types';
 import { VoucherItem } from './voucher-item.entity';
 import { User } from './user.entity';
 import { Brand } from './brand.entity';
@@ -50,6 +51,6 @@ export class Review {
   @Column({ type: 'enum', enum: ReviewStatus, default: ReviewStatus.VISIBLE })
   status: ReviewStatus;
 
-  @CreateDateColumn()
+  @CreateDateColumn(timestampOptions())
   createdAt: Date;
 }

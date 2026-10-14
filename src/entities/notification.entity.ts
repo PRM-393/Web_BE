@@ -1,4 +1,5 @@
 import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn } from 'typeorm';
+import { timestampOptions } from '../config/db-types';
 
 @Entity('notifications')
 export class Notification {
@@ -20,6 +21,6 @@ export class Notification {
   @Column({ default: false })
   readAt: boolean;
 
-  @CreateDateColumn()
+  @CreateDateColumn(timestampOptions())
   createdAt: Date;
 }

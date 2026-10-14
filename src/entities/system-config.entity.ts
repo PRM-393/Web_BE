@@ -1,4 +1,5 @@
 import { Column, Entity, PrimaryColumn, UpdateDateColumn } from 'typeorm';
+import { timestampOptions } from '../config/db-types';
 
 // Vd: key = "commission_rate", value = "0.10" (FR-SETTLE-01, BR-09)
 @Entity('system_configs')
@@ -12,6 +13,6 @@ export class SystemConfig {
   @Column({ nullable: true })
   updatedBy: string;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn(timestampOptions())
   updatedAt: Date;
 }

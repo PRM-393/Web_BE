@@ -6,6 +6,7 @@ import { SettlementItem } from '../../entities/settlement-item.entity';
 import { SystemConfig } from '../../entities/system-config.entity';
 import { Brand } from '../../entities/brand.entity';
 import { Order } from '../../entities/order.entity';
+import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
 import { OrderStatus, SettlementStatus } from '../../common/enums/status.enum';
 import { SetCommissionDto } from './dto/set-commission.dto';
 
@@ -49,13 +50,20 @@ export class SettlementService {
       // chua nam trong bat ky ky doi soat nao truoc do (DC-06). Query duoi day la khung don gian hoa cho scaffold.
       const eligibleOrders = await this.orderRepo
         .createQueryBuilder('o')
-        .innerJoin('voucher_campaigns', 'c', 'c.id = o."campaignId"')
-        .where('c."brandId" = :brandId', { brandId: brand.id })
+        .innerJoin(VoucherCampaign, 'c', 'c.id = o.campaignId')
+        .where('c.brandId = :brandId', { brandId: brand.id })
         .andWhere('o.status = :status', { status: OrderStatus.FULFILLED })
-        .andWhere('o."paidAt" BETWEEN :start AND :end', { start: periodStart, end: periodEnd })
-        .andWhere(
-          `NOT EXISTS (SELECT 1 FROM settlement_items si WHERE si."orderId" = o.id)`,
-        )
+        .andWhere('o.paidAt BETWEEN :start AND :end', { start: periodStart, end: periodEnd })
+        .andWhere((qb) => {
+          // Subquery qua entity de ten cot dung tren ca PostgreSQL va MySQL
+          const settled = qb
+            .subQuery()
+            .select('1')
+            .from(SettlementItem, 'si')
+            .where('si.orderId = o.id')
+            .getQuery();
+          return `NOT EXISTS ${settled}`;
+        })
         .getMany();
 
       if (eligibleOrders.length === 0) continue; // khong sinh phieu neu khong phat sinh doanh thu
