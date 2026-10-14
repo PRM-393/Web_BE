@@ -12,6 +12,7 @@ import { Order } from '../../entities/order.entity';
 import { Payment } from '../../entities/payment.entity';
 import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
 import { VoucherItem } from '../../entities/voucher-item.entity';
+import { SystemConfig } from '../../entities/system-config.entity';
 import { CampaignStatus, OrderStatus, PaymentStatus, VoucherItemStatus } from '../../common/enums/status.enum';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { PaymentWebhookDto } from './dto/payment-webhook.dto';
@@ -24,6 +25,7 @@ export class OrderService {
     @InjectRepository(VoucherCampaign)
     private readonly campaignRepo: Repository<VoucherCampaign>,
     @InjectRepository(VoucherItem) private readonly voucherItemRepo: Repository<VoucherItem>,
+    @InjectRepository(SystemConfig) private readonly configRepo: Repository<SystemConfig>,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -112,6 +114,13 @@ export class OrderService {
       });
       await manager.save(payment);
 
+      if (dto.status === 'SUCCESS' && Number(dto.amount) !== Number(order.totalAmount)) {
+        // BR-20: lech so tien -> PAYMENT_MISMATCH, cho quan tri vien hoan lai so tien da nhan
+        order.status = OrderStatus.PAYMENT_MISMATCH;
+        await manager.save(order);
+        return { message: 'So tien thanh toan khong khop don hang, chuyen quan tri vien xu ly.' };
+      }
+
       if (dto.status !== 'SUCCESS' || order.status !== OrderStatus.PENDING) {
         return { message: 'Ghi nhan thanh toan, khong phat hanh voucher.' };
       }
@@ -131,11 +140,22 @@ export class OrderService {
 
       order.status = OrderStatus.PAID;
       order.paidAt = new Date();
+      order.commissionRate = await this.currentCommissionRate();
       await manager.save(order);
 
       campaign.reservedQuantity = Math.max(0, campaign.reservedQuantity - order.quantity);
       campaign.soldQuantity += order.quantity;
       await manager.save(campaign);
+
+      const day = 24 * 60 * 60 * 1000;
+      const refundWindowDays = parseInt(process.env.REFUND_WINDOW_DAYS || '7', 10);
+      const minDaysBeforeExpire = parseInt(process.env.REFUND_MIN_DAYS_BEFORE_EXPIRE || '3', 10);
+      const refundableUntil = new Date(
+        Math.min(
+          order.paidAt.getTime() + refundWindowDays * day,
+          new Date(campaign.voucherExpireAt).getTime() - minDaysBeforeExpire * day,
+        ),
+      );
 
       const items: VoucherItem[] = [];
       for (let i = 0; i < order.quantity; i++) {
@@ -148,6 +168,7 @@ export class OrderService {
             secretKey: crypto.randomBytes(32).toString('hex'),
             status: VoucherItemStatus.ACTIVE,
             expireAt: campaign.voucherExpireAt,
+            refundableUntil,
           }),
         );
       }
@@ -170,11 +191,17 @@ export class OrderService {
       if (order.reservedUntil < now) {
         await this.dataSource.transaction(async (manager) => {
           order.status = OrderStatus.CANCELLED;
+          order.cancelledAt = now;
           await manager.save(order);
           await manager.decrement(VoucherCampaign, { id: order.campaignId }, 'reservedQuantity', order.quantity);
         });
       }
     }
+  }
+
+  private async currentCommissionRate(): Promise<number> {
+    const config = await this.configRepo.findOne({ where: { key: 'commission_rate' } });
+    return config ? parseFloat(config.value) : parseFloat(process.env.DEFAULT_COMMISSION_RATE || '0.1');
   }
 
   private verifyWebhookSignature(dto: PaymentWebhookDto) {

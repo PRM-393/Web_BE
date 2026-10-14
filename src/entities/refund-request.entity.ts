@@ -9,6 +9,7 @@ import {
 import { DATETIME, timestampOptions } from '../config/db-types';
 import { VoucherItem } from './voucher-item.entity';
 import { User } from './user.entity';
+import { PaymentRefund } from './payment-refund.entity';
 import { RefundRequestStatus } from '../common/enums/status.enum';
 
 @Entity('refund_requests')
@@ -39,8 +40,12 @@ export class RefundRequest {
   @Column({ type: DATETIME, nullable: true })
   decidedAt: Date;
 
-  @Column({ nullable: true })
-  refundTxnId: string;
+  @Column({ type: 'varchar', nullable: true })
+  paymentRefundId: string | null;
+
+  @ManyToOne(() => PaymentRefund, { nullable: true })
+  @JoinColumn({ name: 'paymentRefundId' })
+  paymentRefund: PaymentRefund;
 
   @Column({ nullable: true })
   rejectReason: string;

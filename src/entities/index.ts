@@ -18,3 +18,8 @@ export * from './favorite.entity';
 export * from './notification.entity';
 export * from './device-token.entity';
 export * from './system-config.entity';
+export * from './otp-code.entity';
+export * from './refresh-token.entity';
+export * from './payment-refund.entity';
+export * from './audit-log.entity';
+export * from './notification-setting.entity';

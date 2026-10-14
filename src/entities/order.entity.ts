@@ -39,6 +39,14 @@ export class Order {
   @Column({ type: 'bigint' })
   totalAmount: number;
 
+  // ty le hoa hong chot vao don tai thoi diem thanh toan - BR-09
+  @Column({ type: 'decimal', precision: 5, scale: 4, nullable: true })
+  commissionRate: number | null;
+
+  // tong tien da hoan cho khach (hoan tung voucher khong doi trang thai don) - SRS 6.3
+  @Column({ type: 'bigint', default: 0 })
+  refundedAmount: number;
+
   @Column({ type: 'enum', enum: OrderStatus, default: OrderStatus.PENDING })
   status: OrderStatus;
 
@@ -51,4 +59,7 @@ export class Order {
 
   @Column({ type: DATETIME, nullable: true })
   paidAt: Date;
+
+  @Column({ type: DATETIME, nullable: true })
+  cancelledAt: Date | null;
 }

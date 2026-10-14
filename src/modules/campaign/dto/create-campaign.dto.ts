@@ -12,7 +12,7 @@ import {
   IsUUID,
   Min,
 } from 'class-validator';
-import { VoucherType } from '../../../common/enums/status.enum';
+import { DiscountType, VoucherType } from '../../../common/enums/status.enum';
 
 // FR-CAMP-01/02/03/04/05
 export class CreateCampaignDto {
@@ -40,9 +40,10 @@ export class CreateCampaignDto {
   @IsEnum(VoucherType)
   voucherType: VoucherType;
 
+  // gia ban phai lon hon 0 (FR-CAMP-12)
   @ApiProperty()
-  @IsNumber()
-  @Min(0)
+  @IsInt()
+  @Min(1)
   salePrice: number;
 
   @ApiProperty()
@@ -52,8 +53,31 @@ export class CreateCampaignDto {
 
   @ApiProperty({ required: false })
   @IsOptional()
-  @IsNumber()
-  discountPercent?: number;
+  @IsUUID()
+  categoryId?: string;
+
+  // FR-CAMP-12: bat buoc khi voucherType = DISCOUNT
+  @ApiProperty({ required: false, enum: DiscountType })
+  @IsOptional()
+  @IsEnum(DiscountType)
+  discountType?: DiscountType;
+
+  @ApiProperty({ required: false, description: 'AMOUNT: so tien VND; PERCENT: 1..100' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  discountValue?: number;
+
+  @ApiProperty({ required: false, description: 'Muc giam toi da, bat buoc khi PERCENT' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  maxDiscount?: number;
+
+  @ApiProperty({ required: false, description: 'Noi dung goi, bat buoc khi voucherType = COMBO' })
+  @IsOptional()
+  @IsString()
+  comboItems?: string;
 
   @ApiProperty()
   @IsInt()

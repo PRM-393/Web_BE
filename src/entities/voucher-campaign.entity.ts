@@ -8,7 +8,8 @@ import {
 } from 'typeorm';
 import { DATETIME, timestampOptions } from '../config/db-types';
 import { Brand } from './brand.entity';
-import { CampaignStatus, VoucherType } from '../common/enums/status.enum';
+import { Category } from './category.entity';
+import { CampaignStatus, DiscountType, VoucherType } from '../common/enums/status.enum';
 
 @Entity('voucher_campaigns')
 export class VoucherCampaign {
@@ -21,6 +22,13 @@ export class VoucherCampaign {
   @ManyToOne(() => Brand, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'brandId' })
   brand: Brand;
+
+  @Column({ type: 'varchar', nullable: true })
+  categoryId: string | null;
+
+  @ManyToOne(() => Category, { nullable: true })
+  @JoinColumn({ name: 'categoryId' })
+  category: Category;
 
   @Column()
   title: string;
@@ -45,9 +53,21 @@ export class VoucherCampaign {
   @Column({ type: 'bigint' })
   faceValue: number;
 
-  // ap dung cho voucherType = DISCOUNT_CODE
-  @Column({ type: 'decimal', precision: 5, scale: 2, nullable: true })
-  discountPercent: number;
+  // DISCOUNT: giam theo so tien (AMOUNT) hoac phan tram (PERCENT) - FR-CAMP-12
+  @Column({ type: 'enum', enum: DiscountType, nullable: true })
+  discountType: DiscountType | null;
+
+  // AMOUNT: so tien VND; PERCENT: 1..100
+  @Column({ type: 'bigint', nullable: true })
+  discountValue: number | null;
+
+  // muc giam toi da (VND), bat buoc khi PERCENT
+  @Column({ type: 'bigint', nullable: true })
+  maxDiscount: number | null;
+
+  // COMBO: mo ta noi dung goi
+  @Column({ type: 'text', nullable: true })
+  comboItems: string | null;
 
   @Column({ type: 'int' })
   totalQuantity: number;
@@ -77,6 +97,16 @@ export class VoucherCampaign {
 
   @Column({ nullable: true })
   rejectReason: string;
+
+  // thong tin gui duyet / duyet (UC-04)
+  @Column({ type: DATETIME, nullable: true })
+  submittedAt: Date | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  approvedBy: string | null;
+
+  @Column({ type: DATETIME, nullable: true })
+  approvedAt: Date | null;
 
   @CreateDateColumn(timestampOptions())
   createdAt: Date;

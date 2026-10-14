@@ -55,7 +55,7 @@ export class SearchService {
         qb.orderBy('c.salePrice', 'DESC');
         break;
       case SortOption.DISCOUNT_DESC:
-        qb.orderBy('c.discountPercent', 'DESC');
+        qb.orderBy('c.discountValue', 'DESC');
         break;
       case SortOption.BEST_SELLER:
         qb.orderBy('c.soldQuantity', 'DESC');

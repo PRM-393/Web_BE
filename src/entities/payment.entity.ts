@@ -32,7 +32,7 @@ export class Payment {
   @Column({ type: 'bigint' })
   amount: number;
 
-  @Column({ type: 'enum', enum: PaymentStatus, default: PaymentStatus.INITIATED })
+  @Column({ type: 'enum', enum: PaymentStatus })
   status: PaymentStatus;
 
   // luu toan bo payload tho tu webhook de doi soat, khong ghi vao log (NFR-SEC-05)

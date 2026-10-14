@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, IsNull, Repository } from 'typeorm';
 import * as crypto from 'crypto';
 import { RedeemToken } from '../../entities/redeem-token.entity';
 import { VoucherItem } from '../../entities/voucher-item.entity';
@@ -31,6 +31,12 @@ export class RedeemService {
     if (item.status !== VoucherItemStatus.ACTIVE) {
       throw new BadRequestException('Voucher khong con hieu luc de su dung.');
     }
+
+    // BR-06: sinh token moi thi vo hieu cac token cu chua dung cua voucher
+    await this.tokenRepo.update(
+      { voucherItemId: item.id, usedAt: IsNull(), revokedAt: IsNull() },
+      { revokedAt: new Date() },
+    );
 
     const nonce = crypto.randomBytes(16).toString('hex');
     const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
@@ -79,6 +85,9 @@ export class RedeemService {
     });
     if (!token) {
       throw new BadRequestException('Ma khong hop le.');
+    }
+    if (token.revokedAt) {
+      throw new BadRequestException('Ma da bi thay bang ma moi, vui long quet ma moi nhat.');
     }
     if (token.usedAt) {
       throw new BadRequestException('Ma da duoc su dung.');

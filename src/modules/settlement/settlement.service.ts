@@ -5,9 +5,9 @@ import { Settlement } from '../../entities/settlement.entity';
 import { SettlementItem } from '../../entities/settlement-item.entity';
 import { SystemConfig } from '../../entities/system-config.entity';
 import { Brand } from '../../entities/brand.entity';
-import { Order } from '../../entities/order.entity';
+import { VoucherItem } from '../../entities/voucher-item.entity';
 import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
-import { OrderStatus, SettlementStatus } from '../../common/enums/status.enum';
+import { OrderStatus, SettlementStatus, VoucherItemStatus } from '../../common/enums/status.enum';
 import { SetCommissionDto } from './dto/set-commission.dto';
 
 const COMMISSION_RATE_KEY = 'commission_rate';
@@ -20,7 +20,7 @@ export class SettlementService {
     private readonly settlementItemRepo: Repository<SettlementItem>,
     @InjectRepository(SystemConfig) private readonly configRepo: Repository<SystemConfig>,
     @InjectRepository(Brand) private readonly brandRepo: Repository<Brand>,
-    @InjectRepository(Order) private readonly orderRepo: Repository<Order>,
+    @InjectRepository(VoucherItem) private readonly voucherItemRepo: Repository<VoucherItem>,
   ) {}
 
   // FR-SETTLE-01, BR-09
@@ -42,58 +42,63 @@ export class SettlementService {
   // TODO: lich chay dinh ky dau thang qua @nestjs/schedule Cron (xem settlement.scheduler.ts)
   async runMonthlySettlement(periodStart: Date, periodEnd: Date) {
     const brands = await this.brandRepo.find();
-    const commissionRate = await this.getCommissionRate();
+    const currentRate = await this.getCommissionRate();
     const createdSettlements: Settlement[] = [];
 
     for (const brand of brands) {
-      // FR-SETTLE-04: chi lay don hang da het quyen hoan tien (qua REFUND_WINDOW_DAYS) tinh den thoi diem chot,
-      // chua nam trong bat ky ky doi soat nao truoc do (DC-06). Query duoi day la khung don gian hoa cho scaffold.
-      const eligibleOrders = await this.orderRepo
-        .createQueryBuilder('o')
-        .innerJoin(VoucherCampaign, 'c', 'c.id = o.campaignId')
+      // BR-14: chi lay voucher da het quyen hoan tien tai thoi diem chot, khong dang hoan / da hoan,
+      // va chua thuoc phieu doi soat nao (DC-06). BR-15: voucher het han khong dung van tinh doanh thu.
+      const items = await this.voucherItemRepo
+        .createQueryBuilder('v')
+        .innerJoinAndSelect('v.order', 'o')
+        .innerJoin(VoucherCampaign, 'c', 'c.id = v.campaignId')
         .where('c.brandId = :brandId', { brandId: brand.id })
-        .andWhere('o.status = :status', { status: OrderStatus.FULFILLED })
-        .andWhere('o.paidAt BETWEEN :start AND :end', { start: periodStart, end: periodEnd })
-        .andWhere((qb) => {
-          // Subquery qua entity de ten cot dung tren ca PostgreSQL va MySQL
-          const settled = qb
-            .subQuery()
-            .select('1')
-            .from(SettlementItem, 'si')
-            .where('si.orderId = o.id')
-            .getQuery();
-          return `NOT EXISTS ${settled}`;
+        .andWhere('o.status = :fulfilled', { fulfilled: OrderStatus.FULFILLED })
+        .andWhere('v.status IN (:...statuses)', {
+          statuses: [VoucherItemStatus.ACTIVE, VoucherItemStatus.USED, VoucherItemStatus.EXPIRED],
         })
+        .andWhere('v.refundableUntil <= :end', { end: periodEnd })
+        // chua thuoc phieu nao: LEFT JOIN ... IS NULL chay giong nhau tren PostgreSQL va MySQL
+        .leftJoin(SettlementItem, 'si', 'si.voucherItemId = v.id')
+        .andWhere('si.id IS NULL')
         .getMany();
 
-      if (eligibleOrders.length === 0) continue; // khong sinh phieu neu khong phat sinh doanh thu
+      if (items.length === 0) continue; // khong sinh phieu neu khong phat sinh doanh thu
 
-      const grossRevenue = eligibleOrders.reduce((sum, o) => sum + Number(o.totalAmount), 0);
-      const commissionAmount = Math.round(grossRevenue * commissionRate);
-      const payableAmount = grossRevenue - commissionAmount;
+      // BR-09: dung ty le da chot vao don; don cu chua co thi dung ty le hien hanh
+      const lines = items.map((v) => {
+        const amount = Number(v.order.unitPrice);
+        const rate = v.order.commissionRate != null ? Number(v.order.commissionRate) : currentRate;
+        return { v, amount, rate, commission: Math.round(amount * rate) };
+      });
+      const grossRevenue = lines.reduce((sum, l) => sum + l.amount, 0);
+      const commissionAmount = lines.reduce((sum, l) => sum + l.commission, 0);
 
       const settlement = await this.settlementRepo.save(
         this.settlementRepo.create({
           brandId: brand.id,
           periodStart,
           periodEnd,
+          voucherCount: lines.length,
           grossRevenue,
-          commissionRate,
           commissionAmount,
-          payableAmount,
+          payableAmount: grossRevenue - commissionAmount,
           status: SettlementStatus.PENDING,
         }),
       );
 
-      const items = eligibleOrders.map((order) =>
-        this.settlementItemRepo.create({
-          settlementId: settlement.id,
-          orderId: order.id,
-          amount: order.totalAmount,
-          commissionAmount: Math.round(Number(order.totalAmount) * commissionRate),
-        }),
+      await this.settlementItemRepo.save(
+        lines.map((l) =>
+          this.settlementItemRepo.create({
+            settlementId: settlement.id,
+            voucherItemId: l.v.id,
+            orderId: l.v.orderId,
+            amount: l.amount,
+            commissionRate: l.rate,
+            commissionAmount: l.commission,
+          }),
+        ),
       );
-      await this.settlementItemRepo.save(items);
       createdSettlements.push(settlement);
     }
 

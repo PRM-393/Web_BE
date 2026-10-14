@@ -5,6 +5,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { User } from '../../entities/user.entity';
 import { Role } from '../../common/enums/role.enum';
+import { UserStatus } from '../../common/enums/status.enum';
 import { RegisterDto } from './dto/register.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
@@ -76,6 +77,9 @@ export class AuthService {
     const matches = await bcrypt.compare(dto.password, user.passwordHash);
     if (!matches) {
       throw new UnauthorizedException('Sai email hoac mat khau.');
+    }
+    if (user.status === UserStatus.INACTIVE) {
+      throw new UnauthorizedException('Tai khoan da bi vo hieu hoa.');
     }
     return this.issueTokens(user);
   }

@@ -31,8 +31,8 @@ export class Settlement {
   @Column({ type: 'bigint' })
   grossRevenue: number;
 
-  @Column({ type: 'decimal', precision: 5, scale: 4 })
-  commissionRate: number;
+  @Column({ type: 'int', default: 0 })
+  voucherCount: number;
 
   @Column({ type: 'bigint' })
   commissionAmount: number;

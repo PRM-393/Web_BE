@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import databaseConfig from './config/typeorm.config';
+import { EntitiesModule } from './entities/entities.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { BrandModule } from './modules/brand/brand.module';
 import { CampaignModule } from './modules/campaign/campaign.module';
@@ -19,6 +20,7 @@ import { EngageModule } from './modules/engage/engage.module';
     TypeOrmModule.forRootAsync({
       useFactory: databaseConfig,
     }),
+    EntitiesModule,
     AuthModule,
     BrandModule,
     CampaignModule,

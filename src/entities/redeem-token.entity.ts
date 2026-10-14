@@ -38,4 +38,7 @@ export class RedeemToken {
 
   @Column({ type: DATETIME, nullable: true })
   usedAt: Date;
+
+  @Column({ type: DATETIME, nullable: true })
+  revokedAt: Date | null;
 }

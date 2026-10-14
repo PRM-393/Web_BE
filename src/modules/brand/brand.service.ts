@@ -6,7 +6,7 @@ import { Store } from '../../entities/store.entity';
 import { StaffAssignment } from '../../entities/staff-assignment.entity';
 import { User } from '../../entities/user.entity';
 import { Role } from '../../common/enums/role.enum';
-import { BrandStatus } from '../../common/enums/status.enum';
+import { BrandStatus, UserStatus } from '../../common/enums/status.enum';
 import { CreateBrandDto } from './dto/create-brand.dto';
 import { CreateStoreDto } from './dto/create-store.dto';
 import { CreateStaffDto } from './dto/create-staff.dto';
@@ -75,7 +75,12 @@ export class BrandService {
   async assignStaff(dto: CreateStaffDto) {
     let user = await this.userRepo.findOne({ where: { email: dto.email } });
     if (!user) {
-      user = this.userRepo.create({ email: dto.email, role: Role.STORE_STAFF });
+      // Tai khoan moi cho kich hoat qua lien ket gui email (SRS 7.1 User.status)
+      user = this.userRepo.create({
+        email: dto.email,
+        role: Role.STORE_STAFF,
+        status: UserStatus.PENDING_ACTIVATION,
+      });
       await this.userRepo.save(user);
     }
     const assignment = this.staffRepo.create({

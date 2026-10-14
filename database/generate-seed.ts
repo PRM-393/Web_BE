@@ -52,11 +52,11 @@ const tables: [string, Row[]][] = [
     { id: id.catBeauty, name: 'Làm đẹp', icon: 'spa', displayOrder: 3 },
   ]],
   ['users', [
-    { id: id.admin, email: 'admin@voucher.local', passwordHash: hash, fullName: 'Quản trị viên', role: 'ADMIN', status: true },
-    { id: id.owner, email: 'owner@highlands.local', passwordHash: hash, fullName: 'Chủ Highlands', role: 'BRAND_OWNER', status: true },
-    { id: id.staff, email: 'staff@highlands.local', passwordHash: hash, fullName: 'Nhân viên Lê Lợi', role: 'STORE_STAFF', status: true },
-    { id: id.customer, email: 'khach@voucher.local', passwordHash: null, fullName: 'Khách hàng mẫu', phone: '0900000000', role: 'CUSTOMER', status: true },
-    { id: id.owner2, email: 'owner@phuclong.local', passwordHash: hash, fullName: 'Chủ Phúc Long', role: 'BRAND_OWNER', status: true },
+    { id: id.admin, email: 'admin@voucher.local', passwordHash: hash, fullName: 'Quản trị viên', role: 'ADMIN', status: 'ACTIVE' },
+    { id: id.owner, email: 'owner@highlands.local', passwordHash: hash, fullName: 'Chủ Highlands', role: 'BRAND_OWNER', status: 'ACTIVE' },
+    { id: id.staff, email: 'staff@highlands.local', passwordHash: hash, fullName: 'Nhân viên Lê Lợi', role: 'STORE_STAFF', status: 'ACTIVE' },
+    { id: id.customer, email: 'khach@voucher.local', passwordHash: null, fullName: 'Khách hàng mẫu', phone: '0900000000', role: 'CUSTOMER', status: 'ACTIVE' },
+    { id: id.owner2, email: 'owner@phuclong.local', passwordHash: hash, fullName: 'Chủ Phúc Long', role: 'BRAND_OWNER', status: 'ACTIVE' },
   ]],
   ['brands', [
     {
@@ -79,18 +79,18 @@ const tables: [string, Row[]][] = [
   ]],
   ['voucher_campaigns', [
     {
-      id: id.campPublished, brandId: id.brand, title: 'Voucher 100.000đ chỉ 80.000đ', voucherType: 'PREPAID_VALUE',
+      id: id.campPublished, brandId: id.brand, categoryId: id.catCafe, title: 'Voucher 100.000đ chỉ 80.000đ', voucherType: 'PREPAID',
       description: 'Dùng cho mọi đồ uống tại Highlands', terms: 'Dùng một lần, không hoàn phần dư (BR-03)',
       salePrice: 80000, faceValue: 100000, totalQuantity: 200, soldQuantity: 1, reservedQuantity: 0, limitPerUser: 5,
       saleStartAt: saleStart, saleEndAt: saleEnd, voucherExpireAt: expire, status: 'PUBLISHED',
     },
     {
-      id: id.campDraft, brandId: id.brand, title: 'Combo bánh mì + cà phê sữa', voucherType: 'COMBO',
+      id: id.campDraft, brandId: id.brand, categoryId: id.catCafe, title: 'Combo bánh mì + cà phê sữa', voucherType: 'COMBO', comboItems: '1 bánh mì que, 1 phin sữa đá size M',
       description: '1 bánh mì que + 1 phin sữa đá', salePrice: 45000, faceValue: 59000, totalQuantity: 100,
       limitPerUser: 5, saleStartAt: saleStart, saleEndAt: saleEnd, voucherExpireAt: expire, status: 'DRAFT',
     },
     {
-      id: id.campPending, brandId: id.brand, title: 'Giảm 20% Phindi', voucherType: 'DISCOUNT_CODE', discountPercent: 20,
+      id: id.campPending, brandId: id.brand, categoryId: id.catCafe, title: 'Giảm 20% Phindi', voucherType: 'DISCOUNT', discountType: 'PERCENT', discountValue: 20, maxDiscount: 15000,
       salePrice: 10000, faceValue: 50000, totalQuantity: 300, limitPerUser: 3,
       saleStartAt: saleStart, saleEndAt: saleEnd, voucherExpireAt: expire, status: 'PENDING',
     },
@@ -105,7 +105,7 @@ const tables: [string, Row[]][] = [
   ['orders', [
     {
       id: id.order, userId: id.customer, campaignId: id.campPublished, quantity: 1, unitPrice: 80000, totalAmount: 80000,
-      status: 'FULFILLED', reservedUntil: utc('2026-10-12T03:15:00'), paidAt: utc('2026-10-12T03:01:00'),
+      commissionRate: 0.1, refundedAmount: 0, status: 'FULFILLED', reservedUntil: utc('2026-10-12T03:15:00'), paidAt: utc('2026-10-12T03:01:00'),
     },
   ]],
   ['payments', [
@@ -115,6 +115,8 @@ const tables: [string, Row[]][] = [
     {
       id: id.voucher, orderId: id.order, campaignId: id.campPublished, userId: id.customer, code: 'HL-SEED-0001',
       secretKey: crypto.randomBytes(32).toString('hex'), status: 'ACTIVE', expireAt: expire, lockVersion: 1,
+      // BR-05: min(ngay mua + 7 ngay, han su dung - 3 ngay)
+      refundableUntil: utc('2026-10-19T03:01:00'),
     },
   ]],
   ['system_configs', [

@@ -4,7 +4,7 @@ Web_BE chạy được trên **PostgreSQL 13+** (mặc định, đúng theo SRS)
 
 ```
 database/
-  postgres/schema.sql   # tạo 20 bảng, enum, khóa ngoại (PostgreSQL)
+  postgres/schema.sql   # tạo 25 bảng (SRS 7.1), enum, khóa ngoại (PostgreSQL)
   postgres/seed.sql     # dữ liệu mẫu
   mysql/schema.sql      # như trên cho MySQL (utf8mb4, InnoDB)
   mysql/seed.sql
@@ -93,6 +93,6 @@ Quy ước khi viết truy vấn mới để giữ chạy được trên cả ha
 
 ## Kiểm thử đã làm
 
-- **PostgreSQL:** chạy toàn bộ `schema.sql` và `seed.sql` trên pg-mem (PostgreSQL giả lập). Khóa ngoại được kiểm tra thật.
+- **PostgreSQL:** `npm run test:e2e` nạp `schema.sql` + `seed.sql` vào pg-mem (PostgreSQL giả lập), khởi động toàn bộ API rồi chạy 10 kịch bản: đăng nhập, phân quyền, tạo / duyệt chiến dịch, tìm kiếm, ví, xác nhận sử dụng bằng OTP, đối soát, đánh giá. Khóa ngoại được kiểm tra thật.
 - **MySQL:** đã kiểm tra cú pháp toàn bộ câu lệnh; TypeORM dựng được metadata cho MySQL.
 - **Chưa chạy trên server MySQL thật.** Người đầu tiên dùng MySQL hãy chạy thử rồi báo lại cho nhóm.

@@ -7,6 +7,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
+import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
 
 @ApiTags('campaign')
 @ApiBearerAuth()
@@ -59,8 +60,8 @@ export class CampaignController {
 
   @Roles(Role.ADMIN)
   @Patch(':id/approve')
-  approve(@Param('id') id: string) {
-    return this.campaignService.approve(id);
+  approve(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.campaignService.approve(id, user.userId);
   }
 
   @Roles(Role.ADMIN)

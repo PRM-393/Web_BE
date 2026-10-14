@@ -1,6 +1,7 @@
 import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn } from 'typeorm';
 import { timestampOptions } from '../config/db-types';
 import { Role } from '../common/enums/role.enum';
+import { UserStatus } from '../common/enums/status.enum';
 
 @Entity('users')
 export class User {
@@ -26,8 +27,8 @@ export class User {
   @Column({ type: 'enum', enum: Role, default: Role.CUSTOMER })
   role: Role;
 
-  @Column({ default: true })
-  status: boolean;
+  @Column({ type: 'enum', enum: UserStatus, default: UserStatus.ACTIVE })
+  status: UserStatus;
 
   @CreateDateColumn(timestampOptions())
   createdAt: Date;

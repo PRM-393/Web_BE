@@ -5,20 +5,30 @@ import {
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
+  Unique,
 } from 'typeorm';
-import { timestampOptions } from '../config/db-types';
+import { DATETIME, timestampOptions } from '../config/db-types';
 import { VoucherItem } from './voucher-item.entity';
 import { User } from './user.entity';
-import { Brand } from './brand.entity';
+import { VoucherCampaign } from './voucher-campaign.entity';
 import { ReviewStatus } from '../common/enums/status.enum';
 
+// DC-09: moi khach chi danh gia mot lan cho moi chien dich
 @Entity('reviews')
+@Unique(['userId', 'campaignId'])
 export class Review {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  // moi voucher da dung chi duoc danh gia mot lan - FR-ENGAGE-03, BR-10
-  @Column({ unique: true })
+  @Column()
+  campaignId: string;
+
+  @ManyToOne(() => VoucherCampaign, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'campaignId' })
+  campaign: VoucherCampaign;
+
+  // voucher da USED lam can cu danh gia (BR-10)
+  @Column()
   voucherItemId: string;
 
   @ManyToOne(() => VoucherItem, { onDelete: 'CASCADE' })
@@ -32,13 +42,6 @@ export class Review {
   @JoinColumn({ name: 'userId' })
   user: User;
 
-  @Column()
-  brandId: string;
-
-  @ManyToOne(() => Brand, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'brandId' })
-  brand: Brand;
-
   @Column({ type: 'int' })
   rating: number;
 
@@ -47,6 +50,9 @@ export class Review {
 
   @Column({ type: 'text', nullable: true })
   brandReply: string;
+
+  @Column({ type: DATETIME, nullable: true })
+  brandRepliedAt: Date | null;
 
   @Column({ type: 'enum', enum: ReviewStatus, default: ReviewStatus.VISIBLE })
   status: ReviewStatus;

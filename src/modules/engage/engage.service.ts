@@ -27,13 +27,14 @@ export class EngageService {
     if (item.status !== VoucherItemStatus.USED) {
       throw new BadRequestException('Chi voucher da su dung moi duoc danh gia.');
     }
-    const existing = await this.reviewRepo.findOne({ where: { voucherItemId: item.id } });
-    if (existing) throw new BadRequestException('Voucher nay da duoc danh gia.');
+    // DC-09: moi khach mot danh gia cho moi chien dich
+    const existing = await this.reviewRepo.findOne({ where: { userId, campaignId: item.campaignId } });
+    if (existing) throw new BadRequestException('Ban da danh gia chien dich nay.');
 
     const review = this.reviewRepo.create({
+      campaignId: item.campaignId,
       voucherItemId: item.id,
       userId,
-      brandId: item.campaignId, // TODO: lay dung brandId tu campaign.brandId (can join)
       rating: dto.rating,
       comment: dto.comment,
     });
@@ -46,11 +47,12 @@ export class EngageService {
     if (!review) throw new NotFoundException('Khong tim thay danh gia.');
     if (review.brandReply) throw new BadRequestException('Danh gia nay da duoc phan hoi.');
     review.brandReply = reply;
+    review.brandRepliedAt = new Date();
     return this.reviewRepo.save(review);
   }
 
   listReviewsByBrand(brandId: string) {
-    return this.reviewRepo.find({ where: { brandId } });
+    return this.reviewRepo.find({ where: { campaign: { brandId } }, order: { createdAt: 'DESC' } });
   }
 
   // FR-ENGAGE-01

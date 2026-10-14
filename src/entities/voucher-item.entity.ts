@@ -59,6 +59,10 @@ export class VoucherItem {
   @Column({ type: DATETIME })
   expireAt: Date;
 
+  // BR-05: min(ngay mua + 7 ngay, han su dung - 3 ngay)
+  @Column({ type: DATETIME })
+  refundableUntil: Date;
+
   // NFR-REL-03: khoa ghi tren ban ghi khi redeem de chong redeem trung (FR-REDEEM-11, BR-12)
   @VersionColumn()
   lockVersion: number;

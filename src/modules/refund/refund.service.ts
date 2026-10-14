@@ -4,7 +4,17 @@ import { DataSource, Repository } from 'typeorm';
 import { RefundRequest } from '../../entities/refund-request.entity';
 import { VoucherItem } from '../../entities/voucher-item.entity';
 import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
-import { RefundRequestStatus, VoucherItemStatus } from '../../common/enums/status.enum';
+import { Order } from '../../entities/order.entity';
+import { Payment } from '../../entities/payment.entity';
+import { PaymentRefund } from '../../entities/payment-refund.entity';
+import {
+  PaymentRefundMode,
+  PaymentRefundReason,
+  PaymentRefundStatus,
+  PaymentStatus,
+  RefundRequestStatus,
+  VoucherItemStatus,
+} from '../../common/enums/status.enum';
 import { CreateRefundDto } from './dto/create-refund.dto';
 
 @Injectable()
@@ -49,17 +59,9 @@ export class RefundService {
     if (item.status !== VoucherItemStatus.ACTIVE) {
       return { eligible: false, reason: 'Voucher da duoc su dung hoac khong con hieu luc.' };
     }
-    const refundWindowDays = parseInt(process.env.REFUND_WINDOW_DAYS || '7', 10);
-    const minDaysBeforeExpire = parseInt(process.env.REFUND_MIN_DAYS_BEFORE_EXPIRE || '3', 10);
-
-    const daysSincePurchase = (Date.now() - item.issuedAt.getTime()) / (1000 * 60 * 60 * 24);
-    if (daysSincePurchase > refundWindowDays) {
-      return { eligible: false, reason: `Da qua ${refundWindowDays} ngay ke tu ngay mua.` };
-    }
-
-    const daysUntilExpire = (item.expireAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24);
-    if (daysUntilExpire < minDaysBeforeExpire) {
-      return { eligible: false, reason: `Con it hon ${minDaysBeforeExpire} ngay truoc han su dung.` };
+    // BR-05: refundableUntil = min(ngay mua + 7 ngay, han su dung - 3 ngay), tinh luc phat hanh voucher
+    if (Date.now() > item.refundableUntil.getTime()) {
+      return { eligible: false, reason: 'Da qua thoi han duoc hoan tien cua voucher.' };
     }
     return { eligible: true };
   }
@@ -78,6 +80,25 @@ export class RefundService {
           return refund;
         }
 
+        // Ghi giao dich hoan tai cong theo don gia cua voucher (FR-REFUND-05, DC-12)
+        const order = await manager.findOneOrFail(Order, { where: { id: item.orderId } });
+        const payment = await manager.findOneOrFail(Payment, {
+          where: { orderId: order.id, status: PaymentStatus.SUCCESS },
+        });
+        const paymentRefund = await manager.save(
+          manager.create(PaymentRefund, {
+            paymentId: payment.id,
+            amount: Number(order.unitPrice),
+            reasonType: PaymentRefundReason.CUSTOMER_REQUEST,
+            mode: PaymentRefundMode.AUTO,
+            status: PaymentRefundStatus.COMPLETED,
+            gatewayRefundId: `RF-${Date.now()}`,
+            completedAt: new Date(),
+          }),
+        );
+        order.refundedAmount = Number(order.refundedAmount) + Number(order.unitPrice);
+        await manager.save(order);
+
         item.status = VoucherItemStatus.REFUNDED;
         await manager.save(item);
 
@@ -85,7 +106,7 @@ export class RefundService {
 
         refund.status = RefundRequestStatus.COMPLETED;
         refund.decidedAt = new Date();
-        refund.refundTxnId = `RF-${Date.now()}`;
+        refund.paymentRefundId = paymentRefund.id;
         await manager.save(refund);
 
         // TODO: loai don hang khoi doanh thu doi soat (BR-13) khi module settlement tinh toan ky tiep theo

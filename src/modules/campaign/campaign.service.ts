@@ -3,9 +3,39 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
 import { CampaignStore } from '../../entities/campaign-store.entity';
-import { CampaignStatus } from '../../common/enums/status.enum';
+import { CampaignStatus, DiscountType, VoucherType } from '../../common/enums/status.enum';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { UpdateCampaignDto } from './dto/update-campaign.dto';
+
+// FR-CAMP-12: truong gia tri bat buoc theo loai voucher
+interface ValueFields {
+  voucherType?: VoucherType;
+  salePrice?: number;
+  faceValue?: number;
+  discountType?: DiscountType | null;
+  discountValue?: number | null;
+  maxDiscount?: number | null;
+  comboItems?: string | null;
+}
+
+function validateValueFields(dto: ValueFields) {
+  const salePrice = Number(dto.salePrice);
+  const faceValue = Number(dto.faceValue);
+  if (dto.voucherType === VoucherType.DISCOUNT) {
+    if (!dto.discountType || !dto.discountValue) {
+      throw new BadRequestException('Ma giam gia can kieu giam (so tien / phan tram) va gia tri giam.');
+    }
+    if (dto.discountType === DiscountType.PERCENT && (Number(dto.discountValue) > 100 || !dto.maxDiscount)) {
+      throw new BadRequestException('Giam theo phan tram can gia tri tu 1 den 100 va muc giam toi da.');
+    }
+  }
+  if (dto.voucherType === VoucherType.PREPAID && faceValue <= salePrice) {
+    throw new BadRequestException('Voucher menh gia phai co gia tri lon hon gia ban.');
+  }
+  if (dto.voucherType === VoucherType.COMBO && !dto.comboItems) {
+    throw new BadRequestException('Combo can mo ta noi dung goi.');
+  }
+}
 
 @Injectable()
 export class CampaignService {
@@ -18,6 +48,7 @@ export class CampaignService {
 
   // FR-CAMP-01..05: tao chien dich o trang thai DRAFT
   async create(brandId: string, dto: CreateCampaignDto) {
+    validateValueFields(dto);
     const campaign = this.campaignRepo.create({
       brandId,
       title: dto.title,
@@ -27,7 +58,11 @@ export class CampaignService {
       voucherType: dto.voucherType,
       salePrice: dto.salePrice,
       faceValue: dto.faceValue,
-      discountPercent: dto.discountPercent,
+      categoryId: dto.categoryId ?? null,
+      discountType: dto.discountType ?? null,
+      discountValue: dto.discountValue ?? null,
+      maxDiscount: dto.maxDiscount ?? null,
+      comboItems: dto.comboItems ?? null,
       totalQuantity: dto.totalQuantity,
       limitPerUser: dto.limitPerUser ?? 5,
       saleStartAt: new Date(dto.saleStartAt),
@@ -58,13 +93,16 @@ export class CampaignService {
   async submitForApproval(id: string) {
     const campaign = await this.findOneOrFail(id);
     campaign.status = CampaignStatus.PENDING;
+    campaign.submittedAt = new Date();
     return this.campaignRepo.save(campaign);
   }
 
   // UC-04, FR-CAMP-07: quan tri vien duyet -> tu dong phat hanh khi toi ngay ban
-  async approve(id: string) {
+  async approve(id: string, adminUserId: string) {
     const campaign = await this.findOneOrFail(id);
     campaign.status = CampaignStatus.APPROVED;
+    campaign.approvedBy = adminUserId;
+    campaign.approvedAt = new Date();
     // TODO: tac vu nen kiem tra saleStartAt de tu dong chuyen sang PUBLISHED (FR-CAMP-10)
     return this.campaignRepo.save(campaign);
   }
@@ -105,6 +143,7 @@ export class CampaignService {
         }
       }
     }
+    validateValueFields({ ...campaign, ...dto });
     Object.assign(campaign, dto);
     return this.campaignRepo.save(campaign);
   }
