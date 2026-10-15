@@ -227,6 +227,6 @@ describe('Web_BE e2e (pg-mem)', () => {
 
   it('bang dieu khien quan tri', async () => {
     const res = await http.get('/api/admin/dashboard').set(auth('admin')).expect(200);
-    expect(res.body.totalActiveBrands).toBe(1);
+    expect(res.body.totalActiveBrands).toBe(5); // seed co 5 thuong hieu APPROVED (Circle K con PENDING)
   });
 });
