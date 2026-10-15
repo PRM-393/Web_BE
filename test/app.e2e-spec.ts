@@ -13,6 +13,7 @@ import request from 'supertest';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { AllExceptionsFilter } from '../src/common/filters/http-exception.filter';
+import { corsOrigin } from '../src/config/cors';
 import * as entities from '../src/entities';
 import { RedeemService } from '../src/modules/redeem/redeem.service';
 
@@ -88,6 +89,22 @@ describe('Web_BE e2e (pg-mem)', () => {
 
   afterAll(async () => {
     await app?.close();
+  });
+
+  it('health check cho Render: API va CSDL deu song', async () => {
+    const res = await http.get('/api/health').expect(200);
+    expect(res.body).toMatchObject({ status: 'ok', database: 'up' });
+  });
+
+  it('CORS: cho phep localhost:5173 va *.vercel.app, chan ten mien la', () => {
+    const check = corsOrigin('http://localhost:5173,https://*.vercel.app') as (o: string | undefined, cb: (e: Error | null, ok?: boolean) => void) => void;
+    const allowed = (o?: string) => { let r = false; check(o, (_e, ok) => (r = !!ok)); return r; };
+    expect(allowed('http://localhost:5173')).toBe(true);
+    expect(allowed('https://voucher-platform-web.vercel.app')).toBe(true);
+    expect(allowed('https://evil.com')).toBe(false);
+    expect(allowed('https://a.b.vercel.app.evil.com')).toBe(false);
+    expect(allowed(undefined)).toBe(true);
+    expect(corsOrigin('')).toBe(true);
   });
 
   it('dang nhap sai mat khau tra 401', async () => {

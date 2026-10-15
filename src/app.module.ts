@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import databaseConfig from './config/typeorm.config';
 import { EntitiesModule } from './entities/entities.module';
+import { HealthController } from './health.controller';
 import { AuthModule } from './modules/auth/auth.module';
 import { BrandModule } from './modules/brand/brand.module';
 import { CampaignModule } from './modules/campaign/campaign.module';
@@ -32,5 +33,6 @@ import { EngageModule } from './modules/engage/engage.module';
     ReportModule,
     EngageModule,
   ],
+  controllers: [HealthController],
 })
 export class AppModule {}

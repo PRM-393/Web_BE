@@ -41,6 +41,32 @@ Chay bang Docker (API + Postgres):
 docker compose up --build
 ```
 
+## Trien khai (Render + Neon)
+
+He thong chay that tren cloud, ca nhom khong can cai CSDL hay chay BE tren may moi lam duoc app / web:
+
+| Thanh phan | Noi chay | Dia chi |
+|---|---|---|
+| BE (repo nay) | Render, goi free, Singapore | https://voucher-platform-api.onrender.com/api (Swagger: /docs, kiem tra: /api/health) |
+| CSDL | Neon PostgreSQL (free) | chuoi ket noi chi nam trong bien DATABASE_URL tren Render |
+| Web | Vercel | xem README repo Web_FE |
+| App | APK build tren GitHub Actions | xem README repo Mobile_App |
+
+Lan dau thiet lap (truong nhom lam mot lan):
+1. **Neon** (neon.tech): tao project, region Singapore, database `voucher_platform`. Copy *Connection string* (co `sslmode=require`).
+2. Tao bang + du lieu mau len Neon tu may minh:
+   ```bash
+   DATABASE_URL="<chuoi ket noi Neon>" npm run db:setup
+   ```
+   Lenh tu bo qua neu CSDL da co bang (khong ghi de du lieu that); `-- --reset` de tao lai tu dau.
+3. **Render** (render.com): New -> Blueprint -> chon repo Web_BE. Render doc `render.yaml`, chi hoi `DATABASE_URL`: dan chuoi Neon vao.
+   Khoa JWT do Render tu sinh. Moi lan push len `main` Render tu deploy lai.
+4. Neu Render cap ten mien khac `voucher-platform-api.onrender.com` thi sua `defaultBackend` trong `lib/config/env.dart` cua Web_FE va Mobile_App.
+
+Luu y goi free: Render tat dich vu sau 15 phut khong co request, lan goi dau tien mat khoang 30-60 giay de khoi dong lai.
+Bi mat (DATABASE_URL, JWT) chi dat tren Render, khong commit vao repo. Ai can chay BE tren may thi tao `.env` tu `.env.example`
+(dung PostgreSQL / MySQL tren may, hoac xin truong nhom chuoi Neon cua nhanh dev).
+
 ## Cau truc thu muc
 
 ```

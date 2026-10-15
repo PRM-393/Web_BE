@@ -2,9 +2,16 @@ import { registerAs } from '@nestjs/config';
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { DB_TYPE } from './db-types';
 
-// DB_TYPE=postgres (mac dinh, cong 5432) hoac DB_TYPE=mysql (cong 3306)
+// Hai cach khai bao ket noi:
+//  1. DATABASE_URL (Neon / Supabase / Render): postgresql://user:pass@host/db?sslmode=require
+//  2. Tung bien DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD, DB_NAME (may ca nhan)
+// DB_TYPE=postgres (mac dinh, cong 5432) hoac DB_TYPE=mysql (cong 3306).
+// DB_SSL=true (hoac sslmode=require trong URL) de bat SSL - bat buoc voi CSDL tren cloud.
 export default registerAs('database', (): TypeOrmModuleOptions => {
+  const url = process.env.DATABASE_URL || undefined;
+  const ssl = process.env.DB_SSL === 'true' || /sslmode=require/.test(url || '');
   const common = {
+    url,
     host: process.env.DB_HOST || 'localhost',
     database: process.env.DB_NAME || 'voucher_platform',
     autoLoadEntities: true,
@@ -22,6 +29,7 @@ export default registerAs('database', (): TypeOrmModuleOptions => {
       charset: 'utf8mb4',
       // Doc / ghi datetime theo UTC (CON-05)
       timezone: 'Z',
+      ssl: ssl ? { rejectUnauthorized: false } : undefined,
     };
   }
 
@@ -31,5 +39,6 @@ export default registerAs('database', (): TypeOrmModuleOptions => {
     port: parseInt(process.env.DB_PORT || '5432', 10),
     username: process.env.DB_USERNAME || 'postgres',
     password: process.env.DB_PASSWORD || 'postgres',
+    ssl: ssl ? { rejectUnauthorized: false } : undefined,
   };
 });

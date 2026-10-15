@@ -15,7 +15,8 @@
     "test": "jest --config ./test/jest-unit.json",
     "db:schema": "ts-node database/generate-schema.ts",
     "db:seed-sql": "ts-node database/generate-seed.ts",
-    "test:e2e": "jest --config ./test/jest-e2e.json --runInBand"
+    "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
+    "db:setup": "ts-node database/setup-db.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.4",
@@ -48,6 +49,7 @@
     "@types/jest": "^29.5.13",
     "@types/node": "^20.16.10",
     "@types/passport-jwt": "^4.0.1",
+    "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
     "@types/uuid": "^9.0.8",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
@@ -63,5 +65,8 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.5.4"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

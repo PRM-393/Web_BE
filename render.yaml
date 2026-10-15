@@ -1,0 +1,56 @@
+# Render Blueprint: Dashboard -> New -> Blueprint -> chon repo Web_BE. Render doc file nay va tao dich vu.
+# Chi can nhap tay DATABASE_URL (chuoi ket noi Neon). Khoa JWT do Render tu sinh, khong nam trong repo.
+services:
+  - type: web
+    name: voucher-platform-api
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    # --include=dev: can @nestjs/cli de build du NODE_ENV=production
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run start:prod
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: NODE_ENV
+        value: production
+      - key: API_PREFIX
+        value: api
+      # Web tren Vercel (ca ban preview *.vercel.app) va may phat trien
+      - key: CORS_ORIGIN
+        value: http://localhost:5173,https://*.vercel.app
+      - key: DB_TYPE
+        value: postgres
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_SYNCHRONIZE
+        value: "false"
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_ACCESS_EXPIRES_IN
+        value: 15m
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 60d
+      - key: OTP_LENGTH
+        value: "6"
+      - key: OTP_TTL_MINUTES
+        value: "5"
+      - key: OTP_MAX_REQUESTS_PER_HOUR
+        value: "5"
+      - key: REDEEM_TOKEN_TTL_SECONDS
+        value: "60"
+      - key: ORDER_RESERVATION_TTL_MINUTES
+        value: "15"
+      - key: REFUND_WINDOW_DAYS
+        value: "7"
+      - key: REFUND_MIN_DAYS_BEFORE_EXPIRE
+        value: "3"
+      - key: DEFAULT_COMMISSION_RATE
+        value: "0.1"
+      - key: PAYMENT_GATEWAY
+        value: VNPAY

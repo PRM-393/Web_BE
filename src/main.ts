@@ -3,6 +3,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter';
+import { corsOrigin } from './config/cors';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -10,10 +11,7 @@ async function bootstrap() {
   const apiPrefix = process.env.API_PREFIX || 'api';
   app.setGlobalPrefix(apiPrefix);
 
-  app.enableCors({
-    origin: process.env.CORS_ORIGIN?.split(',') || '*',
-    credentials: true,
-  });
+  app.enableCors({ origin: corsOrigin(), credentials: true });
 
   // Validation toan cuc theo DTO (class-validator) - NFR-MNT
   app.useGlobalPipes(
@@ -37,7 +35,8 @@ async function bootstrap() {
   SwaggerModule.setup('docs', app, document);
 
   const port = process.env.PORT || 3000;
-  await app.listen(port);
+  // 0.0.0.0 de Render / Docker truy cap duoc tu ben ngoai container
+  await app.listen(port, '0.0.0.0');
   // eslint-disable-next-line no-console
   console.log(`API running on http://localhost:${port}/${apiPrefix}`);
   // eslint-disable-next-line no-console
