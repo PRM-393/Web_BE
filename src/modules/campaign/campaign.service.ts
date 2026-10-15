@@ -3,22 +3,23 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
 import { CampaignStore } from '../../entities/campaign-store.entity';
-import { CampaignStatus, DiscountType, VoucherType } from '../../common/enums/status.enum';
+import { Brand } from '../../entities/brand.entity';
+import { BrandStatus, CampaignStatus, DiscountType, VoucherType } from '../../common/enums/status.enum';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { UpdateCampaignDto } from './dto/update-campaign.dto';
 
 // FR-CAMP-12: truong gia tri bat buoc theo loai voucher
-interface ValueFields {
+export interface ValueFields {
   voucherType?: VoucherType;
-  salePrice?: number;
-  faceValue?: number;
+  salePrice?: number | string;
+  faceValue?: number | string;
   discountType?: DiscountType | null;
-  discountValue?: number | null;
-  maxDiscount?: number | null;
+  discountValue?: number | string | null;
+  maxDiscount?: number | string | null;
   comboItems?: string | null;
 }
 
-function validateValueFields(dto: ValueFields) {
+export function validateValueFields(dto: ValueFields) {
   const salePrice = Number(dto.salePrice);
   const faceValue = Number(dto.faceValue);
   if (dto.voucherType === VoucherType.DISCOUNT) {
@@ -37,6 +38,49 @@ function validateValueFields(dto: ValueFields) {
   }
 }
 
+// BR-21 / DC-10 / FR-CAMP-13: han su dung voucher phai cach ngay ket thuc ban it nhat 10 ngay,
+// de moi khach mua o ngay cuoi cung van con du cua so hoan tien (BR-05).
+export const MIN_EXPIRE_DAYS_AFTER_SALE_END = 10;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export interface TimelineFields {
+  saleStartAt?: Date | string;
+  saleEndAt?: Date | string;
+  voucherExpireAt?: Date | string;
+}
+
+// Gia tri co the den tu DTO (chuoi ISO) hoac tu entity (Date), nen quy ve epoch truoc khi so sanh
+function toTime(value?: Date | string | null): number | null {
+  if (value === undefined || value === null) return null;
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? null : time;
+}
+
+export function validateTimeline(fields: TimelineFields) {
+  const start = toTime(fields.saleStartAt);
+  const end = toTime(fields.saleEndAt);
+  const expire = toTime(fields.voucherExpireAt);
+  if (start === null || end === null || expire === null) {
+    throw new BadRequestException('Thieu ngay bat dau ban, ngay ket thuc ban hoac han su dung voucher.');
+  }
+  if (start >= end) {
+    throw new BadRequestException('Ngay ket thuc ban phai sau ngay bat dau ban (BR-21).');
+  }
+  if (expire < end + MIN_EXPIRE_DAYS_AFTER_SALE_END * DAY_MS) {
+    throw new BadRequestException(
+      `Han su dung voucher phai sau ngay ket thuc ban it nhat ${MIN_EXPIRE_DAYS_AFTER_SALE_END} ngay (BR-21).`,
+    );
+  }
+}
+
+// FR-CAMP-15: moi chinh sua tren chien dich o cac trang thai nay dua no ve PENDING cho duyet lai
+const NEEDS_REAPPROVAL: CampaignStatus[] = [
+  CampaignStatus.APPROVED,
+  CampaignStatus.PUBLISHED,
+  CampaignStatus.SOLD_OUT,
+  CampaignStatus.PAUSED,
+];
+
 @Injectable()
 export class CampaignService {
   constructor(
@@ -44,11 +88,14 @@ export class CampaignService {
     private readonly campaignRepo: Repository<VoucherCampaign>,
     @InjectRepository(CampaignStore)
     private readonly campaignStoreRepo: Repository<CampaignStore>,
+    @InjectRepository(Brand)
+    private readonly brandRepo: Repository<Brand>,
   ) {}
 
   // FR-CAMP-01..05: tao chien dich o trang thai DRAFT
   async create(brandId: string, dto: CreateCampaignDto) {
     validateValueFields(dto);
+    validateTimeline(dto);
     const campaign = this.campaignRepo.create({
       brandId,
       title: dto.title,
@@ -89,17 +136,51 @@ export class CampaignService {
     return campaign;
   }
 
-  // FR-CAMP-06: gui duyet
+  // FR-CAMP-06, FR-CAMP-14, BR-26: gui duyet
   async submitForApproval(id: string) {
     const campaign = await this.findOneOrFail(id);
+    if (campaign.status !== CampaignStatus.DRAFT) {
+      throw new BadRequestException('Chi co the gui duyet chien dich o trang thai nhap (FR-CAMP-14).');
+    }
+    // BR-26: thuong hieu chua duoc duyet hoac dang bi dinh chi khong duoc gui duyet chien dich
+    const brand = await this.brandRepo.findOne({ where: { id: campaign.brandId } });
+    if (!brand) throw new NotFoundException('Khong tim thay thuong hieu.');
+    if (brand.status !== BrandStatus.APPROVED) {
+      throw new BadRequestException(
+        'Thuong hieu chua duoc duyet hoac dang bi dinh chi nen khong the gui duyet chien dich (BR-26).',
+      );
+    }
+    // Kiem lai truoc khi vao hang cho: chien dich co the da duoc tao tu lau va khong con hop le
+    validateValueFields(campaign);
+    validateTimeline(campaign);
+
     campaign.status = CampaignStatus.PENDING;
     campaign.submittedAt = new Date();
+    return this.campaignRepo.save(campaign);
+  }
+
+  // FR-CAMP-14: thuong hieu rut chien dich ve nhap de sua roi gui lai
+  async withdraw(id: string) {
+    const campaign = await this.findOneOrFail(id);
+    if (campaign.status !== CampaignStatus.PENDING) {
+      throw new BadRequestException('Chi co the rut ve nhap chien dich dang cho duyet (FR-CAMP-14).');
+    }
+    campaign.status = CampaignStatus.DRAFT;
+    campaign.submittedAt = null;
     return this.campaignRepo.save(campaign);
   }
 
   // UC-04, FR-CAMP-07: quan tri vien duyet -> tu dong phat hanh khi toi ngay ban
   async approve(id: string, adminUserId: string) {
     const campaign = await this.findOneOrFail(id);
+    if (campaign.status !== CampaignStatus.PENDING) {
+      throw new BadRequestException('Chi co the duyet chien dich dang cho duyet.');
+    }
+    // UC-04 luong 3b: vi pham rang buoc ngay hoac gia tri thi khong cho duyet,
+    // quan tri vien phai tu choi kem ly do de thuong hieu sua lai
+    validateValueFields(campaign);
+    validateTimeline(campaign);
+
     campaign.status = CampaignStatus.APPROVED;
     campaign.approvedBy = adminUserId;
     campaign.approvedAt = new Date();
@@ -126,25 +207,61 @@ export class CampaignService {
 
   async resume(id: string) {
     const campaign = await this.findOneOrFail(id);
+    // Khong cho mo lai tu DRAFT / ENDED: lam vay se dua chien dich chua duyet len ban cong khai (NFR-SEC-03)
+    if (campaign.status !== CampaignStatus.PAUSED) {
+      throw new BadRequestException('Chi co the mo lai chien dich dang tam dung.');
+    }
     campaign.status = CampaignStatus.PUBLISHED;
     return this.campaignRepo.save(campaign);
   }
 
-  // BR-17: khong duoc sua gia/gia tri/han su dung neu da ban duoc it nhat 1 voucher
+  // FR-CAMP-14 (khoa sua khi cho duyet), BR-17 (khoa truong gia tri khi da ban), FR-CAMP-15 (duyet lai)
   async update(id: string, dto: UpdateCampaignDto) {
     const campaign = await this.findOneOrFail(id);
+
+    // FR-CAMP-14: chien dich dang cho duyet bi khoa, phai rut ve nhap moi sua duoc
+    if (campaign.status === CampaignStatus.PENDING) {
+      throw new BadRequestException(
+        'Chien dich dang cho duyet khong sua duoc. Hay rut ve nhap roi sua lai (FR-CAMP-14).',
+      );
+    }
+
+    // BR-17: da ban duoc it nhat mot voucher thi khoa gia ban, cac truong gia tri, loai voucher va han su dung
     if (campaign.soldQuantity > 0) {
-      const lockedFields: (keyof UpdateCampaignDto)[] = ['salePrice', 'faceValue', 'voucherExpireAt'];
+      const lockedFields: (keyof UpdateCampaignDto)[] = [
+        'salePrice',
+        'faceValue',
+        'voucherExpireAt',
+        'voucherType',
+        'discountType',
+        'discountValue',
+      ];
       for (const field of lockedFields) {
         if (dto[field] !== undefined) {
           throw new BadRequestException(
-            'Khong the sua gia ban, gia tri hoac han su dung cua chien dich da ban duoc voucher (BR-17).',
+            'Khong the sua gia ban, cac truong gia tri, loai voucher hoac han su dung cua chien dich da ban duoc voucher (BR-17).',
           );
         }
       }
     }
-    validateValueFields({ ...campaign, ...dto });
+
+    // dto chi gui mot phan (PartialType) nen phai kiem tren du lieu sau khi gop voi ban ghi hien tai
+    const merged = { ...campaign, ...dto };
+    validateValueFields(merged);
+    validateTimeline(merged);
+
     Object.assign(campaign, dto);
+    // dto gui ngay duoi dang chuoi ISO (@IsDateString) con cot entity la Date, phai ep kieu nhu create()
+    if (dto.saleStartAt !== undefined) campaign.saleStartAt = new Date(dto.saleStartAt);
+    if (dto.saleEndAt !== undefined) campaign.saleEndAt = new Date(dto.saleEndAt);
+    if (dto.voucherExpireAt !== undefined) campaign.voucherExpireAt = new Date(dto.voucherExpireAt);
+
+    // FR-CAMP-15: sua chien dich da duyet thi phai duyet lai, tam ngung hien thi; voucher da ban khong bi anh huong
+    if (NEEDS_REAPPROVAL.includes(campaign.status)) {
+      campaign.status = CampaignStatus.PENDING;
+      campaign.submittedAt = new Date();
+    }
+
     return this.campaignRepo.save(campaign);
   }
 

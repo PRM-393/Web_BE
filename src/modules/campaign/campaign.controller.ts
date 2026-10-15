@@ -40,6 +40,13 @@ export class CampaignController {
     return this.campaignService.submitForApproval(id);
   }
 
+  // FR-CAMP-14: rut chien dich dang cho duyet ve nhap de sua roi gui lai
+  @Roles(Role.BRAND_OWNER)
+  @Patch(':id/withdraw')
+  withdraw(@Param('id') id: string) {
+    return this.campaignService.withdraw(id);
+  }
+
   @Roles(Role.BRAND_OWNER)
   @Patch(':id/pause')
   pause(@Param('id') id: string) {
