@@ -124,6 +124,21 @@ src/
   (body `{ "success": false }` de thu nhanh that bai). Nho tat o ban that.
 - Job 5 phut huy don qua han; webhook den muon, lech tien, giao dich thua deu duoc xu ly va ghi `audit_logs`.
 
+## Thong bao (F16) - cach goi tu tinh nang khac
+
+Inject `NotificationService` (module global, khong can import) roi goi su kien co san; ham khong bao gio nem loi:
+
+```ts
+await this.notifications.voucherUsed(userId, voucherItemId, campaignTitle, storeName);   // F11 sau khi redeem thanh cong
+await this.notifications.refundResult(userId, refundId, status, message);               // F12 khi co ket qua hoan tien
+await this.notifications.campaignPublished(campaign, brandName);                       // F08 khi chien dich chuyen PUBLISHED
+await this.notifications.notify(userId, NotificationType.X, { title, body, data, dedupeKey }); // truong hop khac
+```
+
+- Goi SAU khi transaction da commit. `dedupeKey` chong gui trung; khach tat nhom thong bao thi tu bo qua.
+- Push FCM chay khi co `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`; khong co thi chi luu trong app.
+- Job 9:00 (gio VN) nhac voucher het han sau 7 ngay va 1 ngay.
+
 ## Dinh dang phan hoi (F01)
 
 Moi API tra ve `{ data, error, meta }` (`src/common/interceptors/response-envelope.interceptor.ts`):
