@@ -114,6 +114,16 @@ src/
 - **CORS**: `CORS_ORIGIN` mac dinh `http://localhost:5173`, khop lenh chay Flutter Web
   `flutter run -d chrome --web-port 5173` cua repo Web_FE. App di dong khong bi CORS.
 
+## Thanh toan payOS (F09)
+
+- Tao don: `POST /api/orders` -> giu cho 15 phut, tra `paymentUrl` (link payOS het han cung luc giu cho).
+- Ket qua thanh toan chi duoc cong nhan qua webhook co chu ky: `POST /api/orders/payos-webhook`
+  (khai bao URL nay o my.payos.vn -> Kenh thanh toan -> Webhook). App hoi trang thai bang `GET /api/orders/:id`.
+- Thanh toan lai trong 15 phut: `POST /api/orders/:id/pay` (tra lai dung link cu).
+- Chua co khoa payOS: `paymentUrl` = null; bat `PAYMENT_SIMULATOR=true` va goi `POST /api/orders/:id/simulate-payment`
+  (body `{ "success": false }` de thu nhanh that bai). Nho tat o ban that.
+- Job 5 phut huy don qua han; webhook den muon, lech tien, giao dich thua deu duoc xu ly va ghi `audit_logs`.
+
 ## Dinh dang phan hoi (F01)
 
 Moi API tra ve `{ data, error, meta }` (`src/common/interceptors/response-envelope.interceptor.ts`):
@@ -138,12 +148,11 @@ Moi API tra ve `{ data, error, meta }` (`src/common/interceptors/response-envelo
 ## Bien moi truong quan trong
 
 Xem `.env.example` day du. Cac nhom chinh: `DB_*` (PostgreSQL), `JWT_*`, `OTP_*`,
-`PAYMENT_GATEWAY_*` (sandbox), `SMTP_*`, `FIREBASE_*`, `REDEEM_TOKEN_TTL_SECONDS`,
+`PAYOS_*` + `PAYMENT_SIMULATOR` (cong thanh toan), `SMTP_*`, `FIREBASE_*`, `REDEEM_TOKEN_TTL_SECONDS`,
 `ORDER_RESERVATION_TTL_MINUTES`, `REFUND_WINDOW_DAYS`, `DEFAULT_COMMISSION_RATE`.
 
 ## Cac TODO nghiep vu chinh con lai (xem comment trong code)
 
-- Xac thuc chu ky HMAC webhook thanh toan that su (BR-18) — `order.service.ts`.
 - Goi API hoan tien that cua cong sandbox + fallback thu cong (ASM-02) — `refund.service.ts`.
 - Tinh khoang cach "gan toi" (Haversine) trong `search.service.ts` (FR-SEARCH-05/06).
 - Gui email OTP that qua SMTP, gui push qua Firebase Admin SDK.
