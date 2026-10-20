@@ -116,6 +116,11 @@ export class OrderService {
 
       if (dto.status === 'SUCCESS' && Number(dto.amount) !== Number(order.totalAmount)) {
         // BR-20: lech so tien -> PAYMENT_MISMATCH, cho quan tri vien hoan lai so tien da nhan
+        if (order.status === OrderStatus.PENDING) {
+          const campaign = await manager.findOneOrFail(VoucherCampaign, { where: { id: order.campaignId }, lock: { mode: 'pessimistic_write' } });
+          campaign.reservedQuantity = Math.max(0, campaign.reservedQuantity - order.quantity);
+          await manager.save(campaign);
+        }
         order.status = OrderStatus.PAYMENT_MISMATCH;
         await manager.save(order);
         return { message: 'So tien thanh toan khong khop don hang, chuyen quan tri vien xu ly.' };

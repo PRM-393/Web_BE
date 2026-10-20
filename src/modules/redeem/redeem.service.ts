@@ -73,7 +73,7 @@ export class RedeemService {
 
     // BR-07: nhan vien chi duoc redeem tai chi nhanh minh duoc gan
     const assignment = await this.staffAssignmentRepo.findOne({
-      where: { userId: staffUserId, storeId: dto.storeId, active: true },
+      where: { userId: staffUserId, storeId: dto.storeId, active: true, store: { status: true } },
     });
     if (!assignment) {
       throw new BadRequestException('Nhan vien khong duoc gan cho chi nhanh nay.');
@@ -144,7 +144,7 @@ export class RedeemService {
   // FR-AUTH-12: danh sach chi nhanh dang duoc gan (active) cho nhan vien
   async findStaffStores(staffUserId: string) {
     const assignments = await this.staffAssignmentRepo.find({
-      where: { userId: staffUserId, active: true },
+      where: { userId: staffUserId, active: true, store: { status: true } },
       relations: ['store'],
     });
     return assignments.map((a) => a.store);

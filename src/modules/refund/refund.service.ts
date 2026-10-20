@@ -4,6 +4,8 @@ import { DataSource, Repository } from 'typeorm';
 import { RefundRequest } from '../../entities/refund-request.entity';
 import { VoucherItem } from '../../entities/voucher-item.entity';
 import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
+import { AuditLog } from '../../entities/audit-log.entity';
+import { CampaignStatus } from '../../common/enums/status.enum';
 import { Order } from '../../entities/order.entity';
 import { Payment } from '../../entities/payment.entity';
 import { PaymentRefund } from '../../entities/payment-refund.entity';
@@ -118,14 +120,37 @@ export class RefundService {
   }
 
   // Quan tri vien xac nhan hoan tien thu cong khi cong thanh toan khong kha dung - FR-REFUND-06
-  async confirmManualRefund(id: string) {
-    const refund = await this.refundRepo.findOne({ where: { id } });
-    if (!refund) throw new NotFoundException('Khong tim thay yeu cau hoan tien.');
-    if (refund.status !== RefundRequestStatus.MANUAL_PENDING) {
-      throw new BadRequestException('Yeu cau khong o trang thai cho xu ly thu cong.');
-    }
-    const item = await this.voucherItemRepo.findOneOrFail({ where: { id: refund.voucherItemId } });
-    return this.processRefund(refund, item);
+  async confirmManualRefund(id: string, actorUserId: string, gatewayRefundId: string) {
+    return this.dataSource.transaction(async manager => {
+      const refund = await manager.findOne(RefundRequest, { where: { id }, lock: { mode: 'pessimistic_write' } });
+      if (!refund || refund.status !== RefundRequestStatus.MANUAL_PENDING) throw new BadRequestException('Yêu cầu không còn chờ hoàn thủ công.');
+      const item = await manager.findOneOrFail(VoucherItem, { where: { id: refund.voucherItemId }, lock: { mode: 'pessimistic_write' } });
+      if (item.status !== VoucherItemStatus.REFUND_PENDING) throw new BadRequestException('Voucher không ở trạng thái chờ hoàn.');
+      const order = await manager.findOneOrFail(Order, { where: { id: item.orderId }, lock: { mode: 'pessimistic_write' } });
+      const payment = await manager.findOneOrFail(Payment, { where: { orderId: order.id, status: PaymentStatus.SUCCESS }, lock: { mode: 'pessimistic_write' } });
+      const previous = await manager.find(PaymentRefund, { where: { paymentId: payment.id, status: PaymentRefundStatus.COMPLETED } });
+      const amount = Number(order.unitPrice);
+      if (previous.reduce((sum, p) => sum + Number(p.amount), 0) + amount > Number(payment.amount)) throw new BadRequestException('Số tiền hoàn vượt giao dịch đã nhận.');
+      const paymentRefund = await manager.save(PaymentRefund, manager.create(PaymentRefund, {
+        paymentId: payment.id, amount, reasonType: PaymentRefundReason.CUSTOMER_REQUEST,
+        mode: PaymentRefundMode.MANUAL, status: PaymentRefundStatus.COMPLETED,
+        gatewayRefundId: gatewayRefundId.trim(), processedBy: actorUserId, completedAt: new Date(),
+      }));
+      item.status = VoucherItemStatus.REFUNDED;
+      order.refundedAmount = Number(order.refundedAmount) + amount;
+      refund.status = RefundRequestStatus.COMPLETED;
+      refund.decidedAt = new Date();
+      refund.paymentRefundId = paymentRefund.id;
+      await manager.save(item); await manager.save(order); await manager.save(refund);
+      const campaign = await manager.findOneOrFail(VoucherCampaign, { where: { id: item.campaignId }, lock: { mode: 'pessimistic_write' } });
+      if (campaign.status !== CampaignStatus.ENDED && campaign.saleEndAt > new Date()) {
+        campaign.soldQuantity = Math.max(0, campaign.soldQuantity - 1);
+        if (campaign.status === CampaignStatus.SOLD_OUT) campaign.status = CampaignStatus.PUBLISHED;
+        await manager.save(campaign);
+      }
+      await manager.save(AuditLog, manager.create(AuditLog, { actorUserId, action: 'CONFIRM_MANUAL_REFUND', entityType: 'RefundRequest', entityId: id, detail: { paymentRefundId: paymentRefund.id } }));
+      return { message: 'Đã ghi nhận hoàn tiền thủ công.' };
+    });
   }
 
   findMyRequests(userId: string) {

@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { SettlementService } from './settlement.service';
 import { SetCommissionDto } from './dto/set-commission.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { BrandResourceGuard } from '../../common/guards/brand-resource.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
@@ -10,7 +11,7 @@ import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current
 
 @ApiTags('settlement')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, BrandResourceGuard)
 @Controller()
 export class SettlementController {
   constructor(private readonly settlementService: SettlementService) {}

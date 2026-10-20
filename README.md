@@ -148,3 +148,17 @@ Xem `.env.example` day du. Cac nhom chinh: `DB_*` (PostgreSQL), `JWT_*`, `OTP_*`
   approve/reject chi tu PENDING, sua sau khi duyet dua ve PENDING (BR-17).
 - Khoa nhap OTP redeem 15 phut sau 5 lan sai (FR-REDEEM-12); danh dau nonce da dung ca khi khong hop le (FR-REDEEM-13).
 - Chan vo hieu hoa chi nhanh ap dung cuoi cung cua chien dich con voucher ACTIVE (BR-24).
+
+## F02 F03 F04 F05 F14 implementation notes
+
+- Run `npm ci`, `npm run build`, `npm test -- --runInBand`, and `npm run test:e2e`.
+- SMTP is required for OTP/activation: configure SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASSWORD, SMTP_FROM and WEB_APP_URL in your environment. Tests replace MailService; they never send real email.
+- Existing sessions must sign in again after this update. Access tokens now reference a database session; refresh tokens rotate and only their SHA-256 hashes are stored.
+- Staff: GET /api/redeem/my-stores, then POST /api/auth/select-store with storeId before POST /api/redeem. The server enforces the store associated with the session.
+- Activation: POST /api/auth/activation/request with email, then POST /api/auth/activate with email, token and password. Tokens last 24 hours and are single-use.
+- Search: GET /api/vouchers supports categoryId, keyword (campaign/brand name), minPrice/maxPrice, minDiscount/maxDiscount (percent), sort, lat/lng, radiusKm (1/3/5/10), locationDenied, page and pageSize (up to 100). distance_asc sorts by the nearest active applicable store. Location filters are evaluated before pagination.
+- GET /api/vouchers/:id accepts lat/lng and returns active applicable stores, availableQuantity, canPurchase, refundPolicy and up to 20 visible reviews plus full review count/average. Only PUBLISHED/SOLD_OUT campaigns in their sale window are public; brand bank details are omitted.
+- Reports: GET /api/brands/:brandId/report supports campaignId, storeId, from and to. Only the brand owner can read it. Sales cohorts are filtered by Order.paidAt; store filters refer to the redemption location, since purchases do not have a store. Date-only inputs cover whole Vietnam calendar days. Revenue subtracts completed voucher refunds; usage rate uses sold vouchers excluding refunded vouchers.
+- GET /api/admin/dashboard returns transactionsByDay in Vietnam time and commission at the rates captured on paid orders, excluding refunded vouchers.
+- Queues: GET /api/refunds/manual-pending and GET /api/admin/payment-mismatches. After completing a refund outside the system, PATCH /api/refunds/:id/confirm-manual or PATCH /api/admin/payment-mismatches/:id/confirm-refund with gatewayRefundId. These actions record an existing external refund; they do not transfer money. Confirmations lock records, record PaymentRefund and AuditLog, and reject repeats.
+- No database schema migration is needed: this update uses existing session, OTP, refund and audit tables. Unit/e2e tests run against pg-mem; validate database locking and delivery with PostgreSQL/MySQL and configured SMTP before deployment.
