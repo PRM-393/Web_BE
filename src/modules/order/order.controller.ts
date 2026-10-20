@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { OrderService } from './order.service';
+import { RawResponse } from '../../common/interceptors/response-envelope.interceptor';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { PaymentWebhookDto } from './dto/payment-webhook.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -42,6 +43,7 @@ export class OrderController {
   // Endpoint public (goi truc tiep boi cong thanh toan sandbox, xac thuc bang chu ky HMAC - khong dung JWT)
   @Post('orders/payment-webhook')
   @HttpCode(200)
+  @RawResponse()
   webhook(@Body() dto: PaymentWebhookDto) {
     return this.orderService.handlePaymentWebhook(dto);
   }

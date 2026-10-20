@@ -114,6 +114,16 @@ src/
 - **CORS**: `CORS_ORIGIN` mac dinh `http://localhost:5173`, khop lenh chay Flutter Web
   `flutter run -d chrome --web-port 5173` cua repo Web_FE. App di dong khong bi CORS.
 
+## Dinh dang phan hoi (F01)
+
+Moi API tra ve `{ data, error, meta }` (`src/common/interceptors/response-envelope.interceptor.ts`):
+
+- Thanh cong: `{ "data": <noi dung>, "error": null, "meta": null }`. Danh sach phan trang tra `{ items, total, page, pageSize }` trong `data`,
+  `meta` tu dien `{ page, pageSize, total, totalPages }`. Mac dinh 20 / trang, toi da 100 (`src/common/dto/pagination.dto.ts`).
+- Loi: `{ "data": null, "error": { "code", "message", "path", "timestamp" }, "meta": null }`; `message` la chuoi tieng Viet hien thang cho nguoi dung.
+- Endpoint phai tra dung dinh dang ben thu ba (IPN cong thanh toan) danh dau `@RawResponse()`.
+- Endpoint moi chi can `return` du lieu; khong tu boc `{ data }` trong controller.
+
 ## Endpoint bo sung cho client Flutter
 
 | Endpoint | Vai tro | Muc dich |
