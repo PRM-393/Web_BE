@@ -2,87 +2,26 @@
 // roi goi API qua HTTP nhu client that. Bat duoc ca loi dang ky module / entity ma tsc khong thay.
 //   npm run test:e2e
 import { INestApplication } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
-import { Test } from '@nestjs/testing';
-import { getDataSourceToken } from '@nestjs/typeorm';
-import * as crypto from 'crypto';
-import * as fs from 'fs';
-import * as path from 'path';
-import { DataType, newDb } from 'pg-mem';
 import request from 'supertest';
-import { DataSource } from 'typeorm';
-import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/app.setup';
 import { corsOrigin } from '../src/config/cors';
-import * as entities from '../src/entities';
 import { RedeemService } from '../src/modules/redeem/redeem.service';
-
-const PASSWORD = 'Voucher@123';
-// id co dinh trong database/generate-seed.ts
-const ID = {
-  brand: '33333333-0000-4000-8000-000000000001',
-  store1: '44444444-0000-4000-8000-000000000001',
-  customer: '22222222-0000-4000-8000-000000000004',
-  voucher: '99999999-0000-4000-8000-000000000001',
-  campPublished: '66666666-0000-4000-8000-000000000001',
-};
-
-function sqlStatements(file: string) {
-  return fs
-    .readFileSync(path.join(__dirname, '..', 'database', 'postgres', file), 'utf8')
-    .split('\n')
-    .filter((l) => l.trim() && !l.startsWith('--') && !/^CREATE EXTENSION/i.test(l))
-    .join('\n')
-    .split(/;\s*\n/)
-    .map((s) => s.trim().replace(/;$/, ''))
-    .filter(Boolean);
-}
-
-async function createDataSource(): Promise<DataSource> {
-  const db = newDb({ autoCreateForeignKeyIndices: true });
-  db.public.registerFunction({ name: 'gen_random_uuid', returns: DataType.uuid, implementation: () => crypto.randomUUID(), impure: true });
-  db.public.registerFunction({ name: 'version', returns: DataType.text, implementation: () => 'PostgreSQL 16' });
-  db.public.registerFunction({ name: 'current_database', returns: DataType.text, implementation: () => 'voucher_platform' });
-  // Nap dung file SQL giao cho nhom: neu entity va schema.sql lech nhau, cac truy van ben duoi se loi
-  for (const stmt of [...sqlStatements('schema.sql'), ...sqlStatements('seed.sql')]) db.public.none(stmt);
-
-  const ds: DataSource = await db.adapters.createTypeormDataSource({
-    type: 'postgres',
-    entities: Object.values(entities).filter((e) => typeof e === 'function'),
-  });
-  return ds.initialize();
-}
+import { ID, createTestApp } from './helpers/test-app';
 
 describe('Web_BE e2e (pg-mem)', () => {
   let app: INestApplication;
   let http: ReturnType<typeof request>;
   const token: Record<string, string> = {};
 
-  const login = async (email: string) => {
-    const res = await http.post('/api/auth/login').send({ email, password: PASSWORD }).expect(201);
-    return res.body.data.accessToken as string;
-  };
   const auth = (role: string) => ({ Authorization: `Bearer ${token[role]}` });
 
   beforeAll(async () => {
-    const dataSource = await createDataSource();
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(getDataSourceToken())
-      .useValue(dataSource)
-      .compile();
-    app = moduleRef.createNestApplication();
-    configureApp(app);
-    await app.init();
-    http = request(app.getHttpServer());
-
-    token.owner = await login('owner@highlands.local');
-    token.staff = await login('staff@highlands.local');
-    token.admin = await login('admin@voucher.local');
-    // Khach dang nhap bang OTP qua email; trong test ky thang access token cung dinh dang voi AuthService
-    token.customer = app.get(JwtService).sign(
-      { sub: ID.customer, email: 'khach@voucher.local', role: 'CUSTOMER' },
-      { secret: process.env.JWT_ACCESS_SECRET || 'change_me_access_secret', expiresIn: '15m' },
-    );
+    const t = await createTestApp();
+    app = t.app;
+    http = t.http;
+    token.owner = await t.login('owner@highlands.local');
+    token.staff = await t.login('staff@highlands.local');
+    token.admin = await t.login('admin@voucher.local');
+    token.customer = t.customerToken(ID.customer, 'khach@voucher.local');
   }, 60000);
 
   afterAll(async () => {
