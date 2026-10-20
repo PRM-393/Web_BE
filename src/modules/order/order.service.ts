@@ -26,6 +26,7 @@ import {
   PaymentStatus,
   VoucherItemStatus,
 } from '../../common/enums/status.enum';
+import { NotificationService } from '../notification/notification.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { PaymentWebhookDto } from './dto/payment-webhook.dto';
 import { availableStock, isOnSale, refundableUntil, remainingPurchaseQuota, voucherCode } from './order.rules';
@@ -53,6 +54,7 @@ export class OrderService {
     @InjectRepository(VoucherItem) private readonly voucherItemRepo: Repository<VoucherItem>,
     @InjectRepository(SystemConfig) private readonly configRepo: Repository<SystemConfig>,
     private readonly dataSource: DataSource,
+    private readonly notifications: NotificationService,
   ) {}
 
   // ================= Tao don (UC-01 buoc 1-4, FR-ORDER-01..04, BR-01, BR-02, DC-03) =================
@@ -182,7 +184,32 @@ export class OrderService {
   }
 
   // Xu ly mot ket qua thanh toan da xac thuc chu ky. Idempotent theo gatewayTxnId.
+  // Thong bao gui SAU khi transaction da commit de khong bao nham khi giao dich bi rollback.
   async processPayment(p: PaymentResult): Promise<PaymentOutcome> {
+    const outcome = await this.processPaymentTx(p);
+    await this.notifyOutcome(p.orderId, outcome);
+    return outcome;
+  }
+
+  // F16: voucher ve vi (FR-ORDER-10); hoan 100% vi het hang (BR-11)
+  private async notifyOutcome(orderId: string, outcome: PaymentOutcome) {
+    if (outcome !== 'FULFILLED' && outcome !== 'FULFILLED_LATE' && outcome !== 'REFUNDED_OVERSOLD') return;
+    const order = await this.orderRepo.findOne({ where: { id: orderId }, relations: ['campaign'] });
+    if (!order) return;
+    const title = order.campaign?.title ?? 'Voucher';
+    if (outcome === 'REFUNDED_OVERSOLD') {
+      await this.notifications.refundResult(
+        order.userId,
+        order.id,
+        'REFUNDED_OVERSOLD',
+        `"${title}" đã hết khi thanh toán của bạn đến. Bạn được hoàn 100% số tiền.`,
+      );
+    } else {
+      await this.notifications.vouchersIssued(order.userId, order.id, title, order.quantity);
+    }
+  }
+
+  private async processPaymentTx(p: PaymentResult): Promise<PaymentOutcome> {
     return this.dataSource.transaction(async (manager) => {
       // DC-04: cong gui lai cung giao dich -> khong lam gi them
       if (await manager.findOne(Payment, { where: { gatewayTxnId: p.gatewayTxnId } })) return 'DUPLICATE';
@@ -291,7 +318,6 @@ export class OrderService {
 
     order.status = OrderStatus.FULFILLED;
     await manager.save(order);
-    // TODO(F16): thong bao "voucher da phat hanh" cho khach (FR-ORDER-10)
   }
 
   // Nha so luong dang giu cho cua don; chien dich SOLD_OUT co hang lai va con thoi gian ban -> PUBLISHED (SRS 6.1)
