@@ -53,15 +53,17 @@ services:
       - key: DEFAULT_COMMISSION_RATE
         value: "0.1"
       - key: PAYMENT_GATEWAY
-        value: VNPAY
-      - key: PAYMENT_GATEWAY_BASE_URL
-        value: https://sandbox.vnpayment.vn
-      # Dien khi da dang ky VNPay sandbox (sandbox.vnpayment.vn/devreg)
-      - key: PAYMENT_GATEWAY_MERCHANT_ID
+        value: PAYOS
+      # Khoa lay o my.payos.vn -> Kenh thanh toan -> Thong tin tich hop
+      - key: PAYOS_CLIENT_ID
         sync: false
-      - key: PAYMENT_GATEWAY_SECRET_KEY
+      - key: PAYOS_API_KEY
         sync: false
-      - key: PAYMENT_GATEWAY_RETURN_URL
+      - key: PAYOS_CHECKSUM_KEY
+        sync: false
+      - key: PAYOS_RETURN_URL
+        value: https://voucher-platform-api.onrender.com/api/orders/payment-return
+      - key: PAYOS_CANCEL_URL
         value: https://voucher-platform-api.onrender.com/api/orders/payment-return
       # Demo do an: cho phep gia lap thanh toan; dat false khi da cau hinh VNPay that
       - key: PAYMENT_SIMULATOR

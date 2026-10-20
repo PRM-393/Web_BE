@@ -29,7 +29,7 @@ import {
 import { CreateOrderDto } from './dto/create-order.dto';
 import { PaymentWebhookDto } from './dto/payment-webhook.dto';
 import { availableStock, isOnSale, refundableUntil, remainingPurchaseQuota, voucherCode } from './order.rules';
-import { PaymentResult, buildVnpayUrl, verifyWebhook } from './payment-gateway';
+import { PaymentResult, PayosWebhookResult, createPayosLink, newPaymentOrderCode, verifyWebhook } from './payment-gateway';
 
 // Ket qua xu ly mot thong bao thanh toan, dung de tra loi cong va de test
 export type PaymentOutcome =
@@ -56,7 +56,7 @@ export class OrderService {
   ) {}
 
   // ================= Tao don (UC-01 buoc 1-4, FR-ORDER-01..04, BR-01, BR-02, DC-03) =================
-  async createOrder(userId: string, dto: CreateOrderDto, clientIp?: string) {
+  async createOrder(userId: string, dto: CreateOrderDto) {
     const order = await this.dataSource.transaction(async (manager) => {
       // Khoa ban ghi chien dich de 2 nguoi mua voucher cuoi cung cung luc khong ban vuot
       const campaign = await this.lockCampaign(manager, dto.campaignId);
@@ -92,30 +92,50 @@ export class OrderService {
           unitPrice,
           totalAmount: unitPrice * dto.quantity,
           status: OrderStatus.PENDING,
+          paymentOrderCode: newPaymentOrderCode(),
           reservedUntil: new Date(Date.now() + RESERVATION_MINUTES() * 60 * 1000),
         }),
       );
     });
-    return { order, paymentUrl: this.paymentUrlFor(order, clientIp) };
+    return { order, paymentUrl: await this.ensurePaymentLink(order) };
   }
 
   // FR-ORDER-12: thanh toan lai don PENDING con trong thoi gian giu cho, lien ket het han dung reservedUntil
-  async retryPayment(userId: string, orderId: string, clientIp?: string) {
+  async retryPayment(userId: string, orderId: string) {
     const order = await this.findMyOrder(userId, orderId);
     if (order.status !== OrderStatus.PENDING) throw new BadRequestException('Don hang khong con cho thanh toan.');
     if (new Date(order.reservedUntil).getTime() <= Date.now()) {
       throw new BadRequestException('Don hang da het thoi gian giu cho, vui long dat lai.');
     }
-    return { order, paymentUrl: this.paymentUrlFor(order, clientIp) };
+    return { order, paymentUrl: await this.ensurePaymentLink(order) };
   }
 
-  private paymentUrlFor(order: Order, clientIp?: string): string {
-    return buildVnpayUrl({
-      orderId: order.id,
-      amount: Number(order.totalAmount),
-      expiresAt: new Date(order.reservedUntil),
-      clientIp,
-    });
+  // Tao link payOS mot lan cho moi don va luu lai; chua cau hinh payOS -> null (app dung che do gia lap thanh toan)
+  private async ensurePaymentLink(order: Order): Promise<string | null> {
+    if (order.paymentUrl) return order.paymentUrl;
+    try {
+      const url = await createPayosLink({
+        orderCode: String(order.paymentOrderCode),
+        amount: Number(order.totalAmount),
+        expiresAt: new Date(order.reservedUntil),
+      });
+      if (url) {
+        order.paymentUrl = url;
+        await this.orderRepo.update(order.id, { paymentUrl: url });
+      }
+      return url;
+    } catch (e) {
+      // Don van giu cho; khach bam "Thanh toan lai" de tao link khi cong hoat dong lai
+      this.logger.warn(`Khong tao duoc link payOS cho don ${order.id}: ${(e as Error).message}`);
+      return null;
+    }
+  }
+
+  // Webhook payOS: tim don theo orderCode roi xu ly chung. Don khong ton tai (vd. payOS gui thu khi dang ky webhook) -> bo qua.
+  async handlePayosWebhook(result: PayosWebhookResult): Promise<PaymentOutcome | 'UNKNOWN_ORDER'> {
+    const order = await this.orderRepo.findOne({ where: { paymentOrderCode: result.orderCode } });
+    if (!order) return 'UNKNOWN_ORDER';
+    return this.processPayment({ ...result, orderId: order.id });
   }
 
   findMyOrders(userId: string) {

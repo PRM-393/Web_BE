@@ -5,7 +5,6 @@ import {
   Get,
   Header,
   HttpCode,
-  Ip,
   Param,
   ParseUUIDPipe,
   Post,
@@ -18,7 +17,7 @@ import { OrderService } from './order.service';
 import { RawResponse } from '../../common/interceptors/response-envelope.interceptor';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { PaymentWebhookDto } from './dto/payment-webhook.dto';
-import { parseVnpay } from './payment-gateway';
+import { parsePayosWebhook } from './payment-gateway';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -35,8 +34,8 @@ export class OrderController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.CUSTOMER)
   @Post('orders')
-  create(@CurrentUser() user: CurrentUserPayload, @Body() dto: CreateOrderDto, @Ip() ip: string) {
-    return this.orderService.createOrder(user.userId, dto, ip);
+  create(@CurrentUser() user: CurrentUserPayload, @Body() dto: CreateOrderDto) {
+    return this.orderService.createOrder(user.userId, dto);
   }
 
   @ApiBearerAuth()
@@ -61,8 +60,8 @@ export class OrderController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.CUSTOMER)
   @Post('orders/:id/pay')
-  retry(@CurrentUser() user: CurrentUserPayload, @Param('id', ParseUUIDPipe) id: string, @Ip() ip: string) {
-    return this.orderService.retryPayment(user.userId, id, ip);
+  retry(@CurrentUser() user: CurrentUserPayload, @Param('id', ParseUUIDPipe) id: string) {
+    return this.orderService.retryPayment(user.userId, id);
   }
 
   // FR-REDEEM-01: vi voucher cua khach hang (app Flutter tu chia tab theo trang thai)
@@ -82,37 +81,31 @@ export class OrderController {
     return this.orderService.handlePaymentWebhook(dto);
   }
 
-  // IPN cua VNPay (GET vnp_*): phai tra dung { RspCode, Message } theo tai lieu VNPay
-  @Get('orders/vnpay-ipn')
+  // Webhook payOS (khai bao URL nay trong trang quan tri payOS). Luon tra 200 de payOS khong gui lai vo han;
+  // chu ky sai thi bo qua va khong xu ly (BR-18).
+  @Post('orders/payos-webhook')
+  @HttpCode(200)
   @RawResponse()
-  async vnpayIpn(@Query() query: Record<string, string>) {
-    const result = parseVnpay(query);
-    if (!result) return { RspCode: '97', Message: 'Invalid signature' };
-    try {
-      const outcome = await this.orderService.processPayment(result);
-      if (outcome === 'DUPLICATE') return { RspCode: '02', Message: 'Order already confirmed' };
-      if (outcome === 'PAYMENT_MISMATCH') return { RspCode: '04', Message: 'Invalid amount' };
-      return { RspCode: '00', Message: 'Confirm Success' };
-    } catch {
-      return { RspCode: '01', Message: 'Order not found' };
-    }
+  async payosWebhook(@Body() body: Record<string, unknown>) {
+    const result = parsePayosWebhook(body as Parameters<typeof parsePayosWebhook>[0]);
+    if (!result) return { success: false, message: 'Invalid signature' };
+    const outcome = await this.orderService.handlePayosWebhook(result);
+    return { success: true, outcome };
   }
 
-  // Trang VNPay chuyen khach ve sau khi thanh toan: chi bao quay lai app, ket qua that lay tu IPN (FR-ORDER-05)
+  // Trang payOS chuyen khach ve (returnUrl / cancelUrl): chi bao quay lai app; ket qua that lay tu webhook (FR-ORDER-05)
   @Get('orders/payment-return')
   @RawResponse()
   @Header('Content-Type', 'text/html; charset=utf-8')
   paymentReturn(@Query() query: Record<string, string>) {
-    const result = parseVnpay(query);
-    const text = !result
-      ? 'Liên kết thanh toán không hợp lệ.'
-      : result.success
-        ? 'Đã nhận thanh toán. Vui lòng quay lại ứng dụng để xem voucher trong ví.'
-        : 'Thanh toán chưa thành công. Bạn có thể quay lại ứng dụng để thanh toán lại trong thời gian giữ chỗ.';
+    const paid = query.status === 'PAID' && query.cancel !== 'true';
+    const text = paid
+      ? 'Đã nhận thanh toán. Vui lòng quay lại ứng dụng để xem voucher trong ví.'
+      : 'Thanh toán chưa hoàn tất. Bạn có thể quay lại ứng dụng để thanh toán lại trong thời gian giữ chỗ.';
     return `<!doctype html><html lang="vi"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Voucher Platform</title><body style="font-family:sans-serif;padding:32px;text-align:center"><h2>${text}</h2></body></html>`;
   }
 
-  // Che do gia lap thanh toan cho demo / test khi chua co tai khoan VNPay sandbox. Bat bang PAYMENT_SIMULATOR=true.
+  // Che do gia lap thanh toan cho demo / test khi chua co khoa payOS. Bat bang PAYMENT_SIMULATOR=true.
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.CUSTOMER)
