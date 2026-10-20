@@ -79,9 +79,15 @@ export class OrderService {
         );
       }
 
-      campaign.reservedQuantity += dto.quantity;
-      if (availableStock(campaign) === 0) campaign.status = CampaignStatus.SOLD_OUT; // SRS 6.1
-      await manager.save(campaign);
+      // Lop bao ve thu hai (DC-03): cong giu cho bang mot cau UPDATE co dieu kien, nguyen tu tren moi he CSDL,
+      // ke ca khi khoa dong khong co tac dung. Khong du ton kho -> 0 dong duoc cap nhat -> tu choi.
+      if (!(await this.reserveStock(manager, campaign.id, dto.quantity))) {
+        throw new BadRequestException('Voucher vua het, vui long chon so luong khac.');
+      }
+      const reserved = await manager.findOneByOrFail(VoucherCampaign, { id: campaign.id });
+      if (availableStock(reserved) === 0 && reserved.status === CampaignStatus.PUBLISHED) {
+        await manager.update(VoucherCampaign, reserved.id, { status: CampaignStatus.SOLD_OUT }); // SRS 6.1
+      }
 
       const unitPrice = Number(campaign.salePrice);
       return manager.save(
@@ -311,6 +317,22 @@ export class OrderService {
         completedAt: new Date(),
       }),
     );
+  }
+
+  // UPDATE ... SET reservedQuantity = reservedQuantity + q WHERE con du ton kho; tra ve true neu cap nhat duoc
+  private async reserveStock(manager: EntityManager, campaignId: string, quantity: number): Promise<boolean> {
+    const col = (name: string) => manager.connection.driver.escape(name);
+    // quantity da qua ValidationPipe (so nguyen >= 1); ep kieu lan nua roi chen so de PostgreSQL / MySQL deu tinh so hoc
+    const q = Math.trunc(Number(quantity));
+    if (!Number.isSafeInteger(q) || q < 1) return false;
+    const result = await manager
+      .createQueryBuilder()
+      .update(VoucherCampaign)
+      .set({ reservedQuantity: () => `${col('reservedQuantity')} + ${q}` })
+      .where(`${col('id')} = :id`, { id: campaignId })
+      .andWhere(`${col('totalQuantity')} - ${col('soldQuantity')} - ${col('reservedQuantity')} >= ${q}`)
+      .execute();
+    return (result.affected ?? 0) > 0;
   }
 
   private async lockCampaign(manager: EntityManager, campaignId: string) {
