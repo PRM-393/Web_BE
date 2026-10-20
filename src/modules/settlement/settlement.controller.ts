@@ -21,10 +21,11 @@ export class SettlementController {
     return this.settlementService.setCommissionRate(dto, user.userId);
   }
 
+  // Tra kem nguoi sua / thoi diem sua gan nhat de man quan tri hien duoc (FR-SETTLE-01)
   @Roles(Role.ADMIN)
   @Get('admin/commission-rate')
-  async getRate() {
-    return { rate: await this.settlementService.getCommissionRate() };
+  getRate() {
+    return this.settlementService.getCommissionRateInfo();
   }
 
   @Roles(Role.ADMIN)

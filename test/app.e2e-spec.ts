@@ -246,4 +246,55 @@ describe('Web_BE e2e (pg-mem)', () => {
     const res = await http.get('/api/admin/dashboard').set(auth('admin')).expect(200);
     expect(res.body.totalActiveBrands).toBe(5); // seed co 5 thuong hieu APPROVED (Circle K con PENDING)
   });
+
+  // Dat cuoi file: test nay doi ty le hoa hong chung va tao them mot don, nen phai chay sau
+  // cac test doi soat / bang dieu khien vo so lieu seed.
+  it('doi ty le hoa hong: don sau mang ty le moi, don cu giu ty le da chot (FR-SETTLE-01, BR-09)', async () => {
+    const before = await http.get('/api/admin/commission-rate').set(auth('admin')).expect(200);
+    expect(Number(before.body.rate)).toBe(0.1);
+    expect(before.body.isDefault).toBe(false);
+
+    // Chi nhan khoang mo 0 < rate < 1
+    for (const rate of [0, 1, 1.5, -0.1, 'muoi phan tram']) {
+      await http.post('/api/admin/commission-rate').set(auth('admin')).send({ rate }).expect(400);
+    }
+    const unchanged = await http.get('/api/admin/commission-rate').set(auth('admin')).expect(200);
+    expect(Number(unchanged.body.rate)).toBe(0.1);
+
+    // Chi quan tri vien duoc doi (NFR-SEC-03)
+    await http.post('/api/admin/commission-rate').set(auth('owner')).send({ rate: 0.25 }).expect(403);
+
+    await http.post('/api/admin/commission-rate').set(auth('admin')).send({ rate: 0.25 }).expect(201);
+    const after = await http.get('/api/admin/commission-rate').set(auth('admin')).expect(200);
+    expect(Number(after.body.rate)).toBe(0.25);
+    expect(after.body.updatedAt).toBeTruthy();
+
+    // Don thanh toan sau khi doi ty le phai chot 0.25
+    const created = await http
+      .post('/api/orders')
+      .set(auth('customer'))
+      .send({ campaignId: ID.campPublished, quantity: 1 })
+      .expect(201);
+    const newOrderId = created.body.order.id as string;
+    await http
+      .post('/api/orders/payment-webhook')
+      .send({
+        orderId: newOrderId,
+        gatewayTxnId: 'txn-doi-ty-le-1',
+        amount: Number(created.body.order.totalAmount),
+        status: 'SUCCESS',
+        signature: 'sandbox-signature',
+        // raw khai bao @IsObject() ma thieu @IsOptional() nen hien tai la truong bat buoc (DTO cua F09)
+        raw: {},
+      })
+      .expect(200);
+
+    const orders = await http.get('/api/orders/me').set(auth('customer')).expect(200);
+    const newOrder = orders.body.find((o: any) => o.id === newOrderId);
+    const seededOrder = orders.body.find((o: any) => o.id === '77777777-0000-4000-8000-000000000001');
+    expect(newOrder.status).toBe('FULFILLED');
+    expect(Number(newOrder.commissionRate)).toBe(0.25);
+    // Don cu khong bi ty le moi anh huong (BR-09)
+    expect(Number(seededOrder.commissionRate)).toBe(0.1);
+  });
 });
