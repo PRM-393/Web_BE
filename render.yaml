@@ -54,3 +54,15 @@ services:
         value: "0.1"
       - key: PAYMENT_GATEWAY
         value: VNPAY
+      - key: PAYMENT_GATEWAY_BASE_URL
+        value: https://sandbox.vnpayment.vn
+      # Dien khi da dang ky VNPay sandbox (sandbox.vnpayment.vn/devreg)
+      - key: PAYMENT_GATEWAY_MERCHANT_ID
+        sync: false
+      - key: PAYMENT_GATEWAY_SECRET_KEY
+        sync: false
+      - key: PAYMENT_GATEWAY_RETURN_URL
+        value: https://voucher-platform-api.onrender.com/api/orders/payment-return
+      # Demo do an: cho phep gia lap thanh toan; dat false khi da cau hinh VNPay that
+      - key: PAYMENT_SIMULATOR
+        value: "true"
