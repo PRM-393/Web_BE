@@ -1,0 +1,3591 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Diep Tran <trancaodiepnct@gmail.com>
+Date: Wed, 21 Oct 2026 14:56:53 +0700
+Subject: [PATCH] feat(F10-F15): wallet tabs, signed redeem token, redeem
+ confirmation, refunds and reviews
+
+- F10 (task 7): new WalletModule - GET /wallet?tab= (ACTIVE incl. REFUND_PENDING, expiry by expireAt)
+  and GET /wallet/:id (owner only, 404 otherwise) with refund / review eligibility.
+- F10 (task 8): QR payload v1.<nonce>.<expMs>.<sig> signed with REDEEM_HMAC_SECRET (no voucher id),
+  unique 6-digit OTP from crypto.randomInt, max 10 tokens / 10 minutes per customer.
+- F11 (task 11): server verifies the QR signature, locks token + voucher, conditional UPDATEs,
+  consumes the token even on business failures, BusinessException with error.reason / error.details.
+- F11 (task 14): BILL_REQUIRED for PREPAID vouchers (token kept), PATCH /redeem/logs/:id/bill within
+  10 minutes, OTP lock 15 minutes after 5 wrong codes in 5 minutes (counted in audit_logs).
+- F12 (task 15-16): RefundGateway (sandbox) with REFUND_MODE auto/manual, REFUND_PENDING -> COMPLETED /
+  FAILED / MANUAL_PENDING, restock unless ENDED, DC-12 check, fail-manual endpoint, AuditLog.
+- F15 (task 18): reviews by campaignId, public list with avgRating, eligibility, admin hide / unhide.
+- Docs: README API contract, docs/demo-redeem.md (task 13), docs/wireframes.html (task 4-5).
+- Tests: 90 unit, 78 e2e (29 new in test/voucher-usage.e2e-spec.ts).
+
+Base: merge_code_v1 (be8334f), which already includes feature/F16-notify-redeem-refund_Viet
+and feature/dat - apply on top of merge_code_v1.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ .env.example                                  |  17 +-
+ README.md                                     |  45 +-
+ database/mysql/schema.sql                     |   2 +-
+ database/postgres/schema.sql                  |   1 +
+ docs/demo-redeem.md                           |  37 ++
+ docs/wireframes.html                          | 142 +++++
+ render.yaml                                   |   8 +
+ src/app.module.ts                             |   2 +
+ src/common/exceptions/business.exception.ts   |  15 +
+ src/common/filters/http-exception.filter.ts   |   5 +
+ .../response-envelope.interceptor.ts          |  10 +-
+ src/common/utils/vn-time.ts                   |  22 +
+ src/entities/redeem-token.entity.ts           |   5 +-
+ src/modules/engage/dto/create-review.dto.ts   |  49 +-
+ src/modules/engage/engage.controller.ts       |  16 +-
+ src/modules/engage/engage.module.ts           |   7 +-
+ src/modules/engage/engage.service.ts          |  49 +-
+ src/modules/engage/review.controller.ts       |  56 ++
+ src/modules/engage/review.service.ts          | 208 ++++++
+ src/modules/order/order.controller.ts         |   9 -
+ src/modules/order/order.service.ts            |  10 -
+ src/modules/redeem/dto/redeem.dto.ts          |  26 +-
+ src/modules/redeem/redeem-token.ts            |  48 ++
+ src/modules/redeem/redeem.controller.ts       |  23 +-
+ src/modules/redeem/redeem.rules.spec.ts       |  64 ++
+ src/modules/redeem/redeem.rules.ts            |  41 ++
+ src/modules/redeem/redeem.service.ts          | 478 ++++++++++----
+ src/modules/refund/dto/create-refund.dto.ts   |  12 +-
+ src/modules/refund/refund-gateway.ts          |  39 ++
+ src/modules/refund/refund.controller.ts       |  23 +-
+ src/modules/refund/refund.module.ts           |   4 +-
+ src/modules/refund/refund.rules.ts            |  45 ++
+ src/modules/refund/refund.service.ts          | 407 ++++++++----
+ src/modules/report/report.service.ts          |  11 +-
+ src/modules/wallet/wallet.controller.ts       |  38 ++
+ src/modules/wallet/wallet.module.ts           |  17 +
+ src/modules/wallet/wallet.rules.spec.ts       |  80 +++
+ src/modules/wallet/wallet.rules.ts            |  48 ++
+ src/modules/wallet/wallet.service.ts          | 121 ++++
+ test/notification.e2e-spec.ts                 |   3 +-
+ test/voucher-usage.e2e-spec.ts                | 595 ++++++++++++++++++
+ 41 files changed, 2515 insertions(+), 323 deletions(-)
+ create mode 100644 docs/demo-redeem.md
+ create mode 100644 docs/wireframes.html
+ create mode 100644 src/common/exceptions/business.exception.ts
+ create mode 100644 src/common/utils/vn-time.ts
+ create mode 100644 src/modules/engage/review.controller.ts
+ create mode 100644 src/modules/engage/review.service.ts
+ create mode 100644 src/modules/redeem/redeem-token.ts
+ create mode 100644 src/modules/redeem/redeem.rules.spec.ts
+ create mode 100644 src/modules/redeem/redeem.rules.ts
+ create mode 100644 src/modules/refund/refund-gateway.ts
+ create mode 100644 src/modules/refund/refund.rules.ts
+ create mode 100644 src/modules/wallet/wallet.controller.ts
+ create mode 100644 src/modules/wallet/wallet.module.ts
+ create mode 100644 src/modules/wallet/wallet.rules.spec.ts
+ create mode 100644 src/modules/wallet/wallet.rules.ts
+ create mode 100644 src/modules/wallet/wallet.service.ts
+ create mode 100644 test/voucher-usage.e2e-spec.ts
+
+diff --git a/.env.example b/.env.example
+index b4f37c1..542afc6 100644
+--- a/.env.example
++++ b/.env.example
+@@ -57,8 +57,19 @@ FIREBASE_PROJECT_ID=changeme
+ FIREBASE_CLIENT_EMAIL=changeme
+ FIREBASE_PRIVATE_KEY=changeme
+ 
+-# ---- Redeem QR token ----
++# ---- Redeem QR token (F10 / F11) ----
+ REDEEM_TOKEN_TTL_SECONDS=60
++# Khoa ky ma QR (HMAC-SHA256). Bat buoc khi NODE_ENV=production; sinh bang: openssl rand -hex 32
++REDEEM_HMAC_SECRET=change_me_redeem_hmac_secret
++# Moi khach toi da 10 lan sinh ma / 10 phut
++REDEEM_TOKEN_MAX_PER_WINDOW=10
++REDEEM_TOKEN_RATE_WINDOW_MINUTES=10
++# Sai OTP 5 lan trong 5 phut -> khoa o nhap OTP cua nhan vien 15 phut (QR van dung duoc)
++REDEEM_OTP_MAX_FAILS=5
++REDEEM_OTP_FAIL_WINDOW_MINUTES=5
++REDEEM_OTP_LOCK_MINUTES=15
++# Sua gia tri hoa don trong 10 phut sau khi xac nhan
++BILL_EDIT_WINDOW_MINUTES=10
+ 
+ # ---- Order stock hold ----
+ ORDER_RESERVATION_TTL_MINUTES=15
+@@ -66,6 +77,10 @@ ORDER_RESERVATION_TTL_MINUTES=15
+ # ---- Refund window (BR-05) ----
+ REFUND_WINDOW_DAYS=7
+ REFUND_MIN_DAYS_BEFORE_EXPIRE=3
++# F12: auto = goi cong hoan tien; manual = moi yeu cau du dieu kien vao hang doi quan tri (MANUAL_PENDING)
++REFUND_MODE=auto
++# Cong hoan tien gia lap (payOS khong co API hoan tien): success | declined | unavailable
++REFUND_SANDBOX_RESULT=success
+ 
+ # ---- Commission (default, overridable via SystemConfig table) ----
+ DEFAULT_COMMISSION_RATE=0.1
+diff --git a/README.md b/README.md
+index 9a0f671..66fb7d6 100644
+--- a/README.md
++++ b/README.md
+@@ -153,13 +153,49 @@ Moi API tra ve `{ data, error, meta }` (`src/common/interceptors/response-envelo
+ 
+ | Endpoint | Vai tro | Muc dich |
+ |---|---|---|
+-| `GET /wallet` | CUSTOMER | Vi voucher cua khach (khong tra secretKey) |
++| `GET /wallet` | CUSTOMER | Vi voucher cua khach (xem muc F10 - F15 ben duoi) |
+ | `GET /redeem/my-stores` | STORE_STAFF | Chi nhanh dang duoc gan de chon chi nhanh lam viec (FR-AUTH-12) |
+ | `GET /brands/:id/staff` | BRAND_OWNER | Danh sach nhan vien theo chi nhanh (FR-BRAND-05) |
+ | `GET /admin/commission-rate` | ADMIN | Ty le hoa hong hien tai (FR-SETTLE-01) |
+ | `GET /admin/settlements` | ADMIN | Tat ca phieu doi soat kem ten thuong hieu (FR-SETTLE-07) |
+ | `GET /refunds/manual-pending` | ADMIN | Yeu cau cho hoan tien thu cong (FR-REFUND-06) |
+ 
++## F10 - F15: vi, ma redeem, xac nhan su dung, hoan tien, danh gia
++
++Loi nghiep vu tra them `error.reason` (ma ly do) va `error.details` de app / web hien thong bao cu the
++(`BusinessException`, mo rong dinh dang F01, client cu van doc `error.message` nhu truoc).
++
++| Endpoint | Vai tro | Ghi chu |
++|---|---|---|
++| `GET /wallet?tab=ACTIVE\|USED\|EXPIRED\|REFUNDED` | CUSTOMER | Moi voucher co `tab`, `displayStatus`, `statusLabel`, `canRedeem`, `refund { canRefund, reasonCode, reason, refundableUntil }`, `review { canReview, hasReviewed }`. REFUND_PENDING nam o tab ACTIVE (nhan "Đang hoàn tiền"); het han xet theo `expireAt`. |
++| `GET /wallet/:id` | CUSTOMER | Nhu tren + `stores`, `redemption`, `refundRequests`, `reviewId`. Voucher nguoi khac -> 404. |
++| `POST /redeem/token` `{ voucherItemId }` | CUSTOMER | `{ qrPayload, otpCode, expiresAt, ttlSeconds }`. QR dang `v1.<nonce>.<expMs>.<chu ky>` (khong chua id voucher). 429 `TOKEN_RATE_LIMITED` sau 10 lan / 10 phut. |
++| `POST /redeem` `{ storeId, qrPayload \| otpCode, billAmount? }` | STORE_STAFF | Gui **nguyen chuoi QR** (may chu kiem chu ky). Tra `{ redemptionLogId, voucherItemId, voucherCode, redeemedAt, method, billAmount, billEditableUntil, campaign }`. |
++| `PATCH /redeem/logs/:id/bill` `{ billAmount }` | STORE_STAFF | Sua hoa don trong 10 phut, chi nguoi da xac nhan. |
++| `GET /redeem/history/today` | STORE_STAFF | Kem `campaignTitle`, `voucherType`, `storeName`, `billEditable`. |
++| `POST /refunds` `{ voucherItemId, reason? }` | CUSTOMER | `status`: COMPLETED / FAILED / MANUAL_PENDING / REJECTED (kem `rejectReason`). |
++| `GET /refunds/me` | CUSTOMER | Kem `statusLabel`, `amount`, `campaignTitle`, `paymentRefund`. |
++| `GET /refunds/manual-pending` | ADMIN | Kem `customer`, `payment`, `amount`. |
++| `PATCH /refunds/:id/confirm-manual` `{ gatewayRefundId }` | ADMIN | Da hoan tay (bat buoc ma giao dich), ghi AuditLog. |
++| `PATCH /refunds/:id/fail-manual` `{ reason }` | ADMIN | Khong hoan duoc: FAILED, voucher ve ACTIVE / EXPIRED, ghi AuditLog. |
++| `GET /admin/payment-mismatches`, `PATCH .../:id/confirm-refund` | ADMIN | Don lech so tien (kem `campaignTitle`, `customer`). |
++| `POST /reviews` `{ campaignId, rating, comment? }` | CUSTOMER | Can >= 1 voucher USED cua chien dich; 1 danh gia / chien dich. Van nhan `voucherItemId` nhu ban cu. |
++| `GET /campaigns/:id/reviews?page&pageSize` | Cong khai | Chi VISIBLE, kem `avgRating`, `reviewCount`; ten nguoi danh gia da che. |
++| `GET /campaigns/:id/reviews/eligibility` | CUSTOMER | `{ canReview, reasonCode, reason, reviewId }`. |
++| `PATCH /reviews/:id/reply` `{ reply }` | BRAND_OWNER | Mot lan, chi thuong hieu so huu. |
++| `GET /admin/reviews?status&brandId`, `PATCH /admin/reviews/:id/hide` `{ reason }`, `PATCH .../unhide` | ADMIN | An / hien danh gia, ghi AuditLog; diem trung binh chi tinh VISIBLE. |
++
++Ma `error.reason` cua `POST /redeem`: `TOKEN_INVALID`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `TOKEN_USED`, `OTP_INVALID`
++(`details.remainingAttempts`), `OTP_LOCKED` (429, `details.lockedUntil`), `VOUCHER_USED` (`details.usedAt`, `storeName`),
++`VOUCHER_EXPIRED`, `VOUCHER_REFUND_PENDING`, `VOUCHER_REFUNDED`, `WRONG_STORE` (`details.stores[]`),
++`BILL_REQUIRED` (ma chua bi tieu, nhap hoa don roi gui lai), `STORE_NOT_SELECTED`, `STAFF_NOT_ASSIGNED`, `CODE_REQUIRED`.
++
++CSDL da co du lieu (Neon) can chay them mot lan:
++
++```sql
++CREATE INDEX IF NOT EXISTS "IDX_cf00847498e2e51564cbc7a799" ON "redeem_tokens" ("otpCode");
++```
++
+ ## Bien moi truong quan trong
+ 
+ Xem `.env.example` day du. Cac nhom chinh: `DB_*` (PostgreSQL), `JWT_*`, `OTP_*`,
+@@ -168,19 +204,18 @@ Xem `.env.example` day du. Cac nhom chinh: `DB_*` (PostgreSQL), `JWT_*`, `OTP_*`
+ 
+ ## Cac TODO nghiep vu chinh con lai (xem comment trong code)
+ 
+-- Goi API hoan tien that cua cong sandbox + fallback thu cong (ASM-02) — `refund.service.ts`.
++- Cong hoan tien that: `RefundGateway` dang dung `SandboxRefundGateway` (payOS khong co API hoan tien);
++  co cong that thi ke thua `RefundGateway` va doi provider trong `refund.module.ts`.
+ - Tinh khoang cach "gan toi" (Haversine) trong `search.service.ts` (FR-SEARCH-05/06).
+ - Gui email OTP that qua SMTP, gui push qua Firebase Admin SDK.
+ - Ghi log kiem toan cho cac thao tac quan trong vao bang `audit_logs` (NFR-SEC-07) — bang da co, chua ghi.
+ - Tac vu nen chuyen trang thai theo SRS 6.1: APPROVED -> PUBLISHED, PUBLISHED <-> SOLD_OUT, -> ENDED; voucher het han -> EXPIRED (tru REFUND_PENDING).
+-- Luong hoan tien day du qua cong: voucher REFUND_PENDING trong luc xu ly, yeu cau FAILED khi cong tu choi (SRS 6.2, 6.4);
+-  quan tri vien hoan don PAYMENT_MISMATCH roi chuyen CANCELLED (SRS 6.3). Bang `payment_refunds` da co.
++- Don PAYMENT_MISMATCH quan tri vien khong hoan duoc: chua co trang thai rieng (hien chi co "da hoan" -> CANCELLED).
+ - Dinh chi thuong hieu (BrandStatus.SUSPENDED, FR-BRAND-09) va cai dat thong bao (`notification_settings`).
+ - Kiem tra quyen so huu: cac endpoint nhan `:brandId` / `:id` (chien dich, chi nhanh, nhan vien, bao cao,
+   doi soat) chua kiem tra ban ghi co thuoc thuong hieu cua nguoi dang nhap (NFR-SEC-03, BR-19, DC-14).
+ - Kiem tra chuyen trang thai chien dich: submit chi tu DRAFT va thuong hieu da duyet (BR-26),
+   approve/reject chi tu PENDING, sua sau khi duyet dua ve PENDING (BR-17).
+-- Khoa nhap OTP redeem 15 phut sau 5 lan sai (FR-REDEEM-12); danh dau nonce da dung ca khi khong hop le (FR-REDEEM-13).
+ - Chan vo hieu hoa chi nhanh ap dung cuoi cung cua chien dich con voucher ACTIVE (BR-24).
+ 
+ ## F02 F03 F04 F05 F14 implementation notes
+diff --git a/database/mysql/schema.sql b/database/mysql/schema.sql
+index 631a6cc..f819820 100644
+--- a/database/mysql/schema.sql
++++ b/database/mysql/schema.sql
+@@ -16,7 +16,7 @@ CREATE TABLE `orders` (`id` varchar(36) NOT NULL, `userId` varchar(255) NOT NULL
+ CREATE TABLE `otp_codes` (`id` varchar(36) NOT NULL, `email` varchar(255) NOT NULL, `purpose` enum ('REGISTER', 'LOGIN', 'ACTIVATE', 'RESET_PASSWORD') NOT NULL, `codeHash` varchar(255) NOT NULL, `attempts` int NOT NULL DEFAULT '0', `expiresAt` datetime NOT NULL, `usedAt` datetime NULL, `createdAt` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), INDEX `IDX_d9a9c6325dfb1d16b5f6b2f6ac` (`email`, `purpose`), PRIMARY KEY (`id`)) ENGINE=InnoDB;
+ CREATE TABLE `payment_refunds` (`id` varchar(36) NOT NULL, `paymentId` varchar(255) NOT NULL, `amount` bigint NOT NULL, `reasonType` enum ('CUSTOMER_REQUEST', 'OVERSOLD', 'MISMATCH') NOT NULL, `mode` enum ('AUTO', 'MANUAL') NOT NULL, `status` enum ('PROCESSING', 'COMPLETED', 'FAILED') NOT NULL DEFAULT 'PROCESSING', `gatewayRefundId` varchar(255) NULL, `processedBy` varchar(255) NULL, `createdAt` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), `completedAt` datetime NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB;
+ CREATE TABLE `payments` (`id` varchar(36) NOT NULL, `orderId` varchar(255) NOT NULL, `gateway` varchar(255) NOT NULL, `gatewayTxnId` varchar(255) NOT NULL, `amount` bigint NOT NULL, `status` enum ('SUCCESS', 'FAILED', 'CANCELLED') NOT NULL, `rawPayload` json NULL, `receivedAt` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), UNIQUE INDEX `IDX_8c55510fcf2450a133f0f77fdd` (`gatewayTxnId`), PRIMARY KEY (`id`)) ENGINE=InnoDB;
+-CREATE TABLE `redeem_tokens` (`id` varchar(36) NOT NULL, `voucherItemId` varchar(255) NOT NULL, `nonce` varchar(255) NOT NULL, `otpCode` varchar(255) NOT NULL, `issuedAt` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), `expiresAt` datetime NOT NULL, `usedAt` datetime NULL, `revokedAt` datetime NULL, UNIQUE INDEX `IDX_c3a9d3db15586bac81783574d2` (`nonce`), PRIMARY KEY (`id`)) ENGINE=InnoDB;
++CREATE TABLE `redeem_tokens` (`id` varchar(36) NOT NULL, `voucherItemId` varchar(255) NOT NULL, `nonce` varchar(255) NOT NULL, `otpCode` varchar(255) NOT NULL, `issuedAt` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), `expiresAt` datetime NOT NULL, `usedAt` datetime NULL, `revokedAt` datetime NULL, INDEX `IDX_cf00847498e2e51564cbc7a799` (`otpCode`), UNIQUE INDEX `IDX_c3a9d3db15586bac81783574d2` (`nonce`), PRIMARY KEY (`id`)) ENGINE=InnoDB;
+ CREATE TABLE `redemption_logs` (`id` varchar(36) NOT NULL, `voucherItemId` varchar(255) NOT NULL, `storeId` varchar(255) NOT NULL, `staffUserId` varchar(255) NOT NULL, `billAmount` bigint NULL, `billUpdatedAt` datetime NULL, `redeemedAt` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), `method` enum ('QR', 'OTP') NOT NULL DEFAULT 'QR', UNIQUE INDEX `IDX_cd36021dbb7b82a771e6377516` (`voucherItemId`), PRIMARY KEY (`id`)) ENGINE=InnoDB;
+ CREATE TABLE `refresh_tokens` (`id` varchar(36) NOT NULL, `userId` varchar(255) NOT NULL, `deviceId` varchar(255) NOT NULL, `tokenHash` varchar(255) NOT NULL, `activeStoreId` varchar(255) NULL, `expiresAt` datetime NOT NULL, `revokedAt` datetime NULL, `createdAt` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), UNIQUE INDEX `IDX_c25bc63d248ca90e8dcc1d92d0` (`tokenHash`), PRIMARY KEY (`id`)) ENGINE=InnoDB;
+ CREATE TABLE `refund_requests` (`id` varchar(36) NOT NULL, `voucherItemId` varchar(255) NOT NULL, `userId` varchar(255) NOT NULL, `reason` text NULL, `status` enum ('REQUESTED', 'PROCESSING', 'REJECTED', 'MANUAL_PENDING', 'COMPLETED', 'FAILED') NOT NULL DEFAULT 'REQUESTED', `decidedAt` datetime NULL, `paymentRefundId` varchar(255) NULL, `rejectReason` varchar(255) NULL, `createdAt` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), PRIMARY KEY (`id`)) ENGINE=InnoDB;
+diff --git a/database/postgres/schema.sql b/database/postgres/schema.sql
+index 1f37612..0c1ef76 100644
+--- a/database/postgres/schema.sql
++++ b/database/postgres/schema.sql
+@@ -27,6 +27,7 @@ CREATE TABLE "payment_refunds" ("id" uuid NOT NULL DEFAULT gen_random_uuid(), "p
+ CREATE TYPE "payments_status_enum" AS ENUM('SUCCESS', 'FAILED', 'CANCELLED');
+ CREATE TABLE "payments" ("id" uuid NOT NULL DEFAULT gen_random_uuid(), "orderId" uuid NOT NULL, "gateway" character varying NOT NULL, "gatewayTxnId" character varying NOT NULL, "amount" bigint NOT NULL, "status" "payments_status_enum" NOT NULL, "rawPayload" jsonb, "receivedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "UQ_8c55510fcf2450a133f0f77fdda" UNIQUE ("gatewayTxnId"), CONSTRAINT "PK_197ab7af18c93fbb0c9b28b4a59" PRIMARY KEY ("id"));
+ CREATE TABLE "redeem_tokens" ("id" uuid NOT NULL DEFAULT gen_random_uuid(), "voucherItemId" uuid NOT NULL, "nonce" character varying NOT NULL, "otpCode" character varying NOT NULL, "issuedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "expiresAt" TIMESTAMP WITH TIME ZONE NOT NULL, "usedAt" TIMESTAMP WITH TIME ZONE, "revokedAt" TIMESTAMP WITH TIME ZONE, CONSTRAINT "UQ_c3a9d3db15586bac81783574d2e" UNIQUE ("nonce"), CONSTRAINT "PK_32dd539b3a2dfb7c027d23fbf28" PRIMARY KEY ("id"));
++CREATE INDEX "IDX_cf00847498e2e51564cbc7a799" ON "redeem_tokens" ("otpCode") ;
+ CREATE TYPE "redemption_logs_method_enum" AS ENUM('QR', 'OTP');
+ CREATE TABLE "redemption_logs" ("id" uuid NOT NULL DEFAULT gen_random_uuid(), "voucherItemId" uuid NOT NULL, "storeId" uuid NOT NULL, "staffUserId" uuid NOT NULL, "billAmount" bigint, "billUpdatedAt" TIMESTAMP WITH TIME ZONE, "redeemedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), "method" "redemption_logs_method_enum" NOT NULL DEFAULT 'QR', CONSTRAINT "UQ_cd36021dbb7b82a771e63775167" UNIQUE ("voucherItemId"), CONSTRAINT "PK_940760ec90aca4edfab73a7e4d3" PRIMARY KEY ("id"));
+ CREATE TABLE "refresh_tokens" ("id" uuid NOT NULL DEFAULT gen_random_uuid(), "userId" uuid NOT NULL, "deviceId" character varying NOT NULL, "tokenHash" character varying NOT NULL, "activeStoreId" uuid, "expiresAt" TIMESTAMP WITH TIME ZONE NOT NULL, "revokedAt" TIMESTAMP WITH TIME ZONE, "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "UQ_c25bc63d248ca90e8dcc1d92d06" UNIQUE ("tokenHash"), CONSTRAINT "PK_7d8bee0204106019488c4c50ffa" PRIMARY KEY ("id"));
+diff --git a/docs/demo-redeem.md b/docs/demo-redeem.md
+new file mode 100644
+index 0000000..552d7b8
+--- /dev/null
++++ b/docs/demo-redeem.md
+@@ -0,0 +1,37 @@
++# Kịch bản demo luồng sử dụng voucher (F10 – F11 – F12 – F15)
++
++Dùng cho buổi demo giữa kỳ / bảo vệ. Thời lượng khoảng 6 phút.
++
++## Chuẩn bị (trước giờ demo 15 phút)
++
++| Thiết bị | Vai trò | Mở sẵn |
++|---|---|---|
++| Điện thoại 1 (Android, cài APK) | Khách hàng | App, đã đăng nhập `khach@voucher.local` (OTP gửi về email) |
++| Điện thoại 2 hoặc laptop có camera | Nhân viên cửa hàng | Web cửa hàng (bản Vercel, HTTPS để trình duyệt cho dùng camera), đăng nhập `staff@pizza4ps.local` / `Voucher@123` |
++| Laptop chiếu màn hình | Quản trị viên | Web quản trị, đăng nhập `admin@voucher.local` / `Voucher@123` |
++
++- `staff@pizza4ps.local` chỉ được gán **1 chi nhánh** (Pizza 4P's Lê Thánh Tôn), nên web tự chọn chi nhánh làm việc.
++- Gọi `https://voucher-platform-api.onrender.com/api/health` trước 1–2 phút để đánh thức Render (gói miễn phí ngủ sau 15 phút).
++- Khách mua sẵn **3 voucher Pizza 4P's** và **1 voucher Highlands** (thanh toán giả lập), để kịch bản 4 có voucher sai chi nhánh.
++- Chạy ở máy cá nhân, không cần SMTP: `npx ts-node -T test/helpers/serve-memory.ts 3000` (Web_BE). Mã OTP của khách nằm trong file `Web_BE/.e2e-mail.json`.
++
++## Các bước
++
++| # | Thao tác | Kết quả mong đợi |
++|---|---|---|
++| 1 | Khách mở **Ví voucher** → tab "Đang hiệu lực" → chạm voucher Pizza → **Sử dụng ngay** | Hiện mã QR, mã OTP 6 số và đồng hồ đếm ngược 60 giây; màn hình không tắt. Hết 60 giây mã tự làm mới. |
++| 2 | Nhân viên chọn tab **Quét QR**, nhập giá trị hóa đơn, quét mã trên điện thoại khách | Màn **xanh "HỢP LỆ"** (tên voucher, mã tra cứu, giờ). Trong vòng 5 giây, điện thoại khách hiện "Voucher đã được sử dụng"; khách nhận thông báo. |
++| 3 | Nhân viên quét lại đúng mã đó | Màn **đỏ "ĐÃ SỬ DỤNG"**: "Đã dùng lúc … tại Pizza 4P's Lê Thánh Tôn". |
++| 4 | Khách mở mã của voucher **Highlands**, nhân viên Pizza quét | Màn **đỏ "SAI CHI NHÁNH"** kèm danh sách chi nhánh Highlands áp dụng. Mã này đã bị tiêu, khách phải tạo mã mới. |
++| 5 | Khách mở voucher Pizza thứ 2, đọc **OTP**; nhân viên chuyển sang tab **Nhập OTP** và nhập mã | Hợp lệ. (Tùy chọn) nhập sai OTP 5 lần thì ô OTP bị khóa 15 phút, quét QR vẫn được. |
++| 6 | Nhân viên mở **Lịch sử trong ngày** → **Sửa hóa đơn** ở lượt vừa xác nhận | Sửa được trong 10 phút sau khi xác nhận. |
++| 7 | Tắt mạng điện thoại khách → mở **Ví voucher** | Vẫn xem được ví (dữ liệu SQLite), có banner "Mất kết nối"; nút **Sử dụng ngay** bị ẩn kèm lý do "Cần kết nối mạng…". Bật lại mạng. |
++| 8 | Khách mở voucher Pizza thứ 3 → **Yêu cầu hoàn tiền** | Thấy hạn chót hoàn. Gửi yêu cầu → "Hoàn tiền thành công", voucher chuyển sang tab "Đã hoàn". Voucher đã dùng thì nút hoàn bị khóa kèm lý do. |
++| 9 | (Hoàn thủ công) Đặt `REFUND_MODE=manual` rồi gửi thêm một yêu cầu; quản trị viên mở **Hoàn tiền** → nhập mã giao dịch → **Đã hoàn tiền** | Yêu cầu chuyển "Hoàn tiền thành công"; app khách thấy trạng thái mới trong **Yêu cầu hoàn tiền**. |
++| 10 | Khách mở chi tiết chiến dịch Pizza → **Viết đánh giá** (4 sao) | Đánh giá hiện cùng điểm trung bình. Khách chưa dùng voucher thì không thấy nút. Quản trị viên **Ẩn** đánh giá thì điểm trung bình được tính lại. |
++
++## Sự cố thường gặp
++
++- **Web không mở được camera**: phải chạy qua HTTPS (bản Vercel) hoặc `localhost`, và cho phép trình duyệt dùng camera. Nếu vẫn không được thì dùng OTP.
++- **"Vui lòng chọn chi nhánh làm việc"**: đăng xuất rồi đăng nhập lại web cửa hàng để chọn lại chi nhánh.
++- **"Bạn đã tạo mã 10 lần trong 10 phút"**: mỗi khách chỉ được tạo tối đa 10 mã trong 10 phút. Đợi đến giờ được ghi trong thông báo, hoặc demo bằng tài khoản khách khác.
+diff --git a/docs/wireframes.html b/docs/wireframes.html
+new file mode 100644
+index 0000000..7250358
+--- /dev/null
++++ b/docs/wireframes.html
+@@ -0,0 +1,142 @@
++<!doctype html>
++<html lang="vi">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1">
++<title>Wireframe F10–F11</title>
++<style>
++  :root { --ink:#1f2937; --line:#9ca3af; --soft:#e5e7eb; --fill:#f3f4f6; --note:#b45309; --bg:#ffffff; }
++  * { box-sizing: border-box; }
++  body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--ink);
++         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
++  h1 { font-size: 22px; margin: 0 0 4px; }
++  h2 { font-size: 17px; margin: 32px 0 4px; }
++  p.lead { margin: 0 0 8px; color: #4b5563; max-width: 860px; }
++  .row { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; }
++  .frame { border: 2px solid var(--ink); border-radius: 14px; background: #fff; overflow: hidden; }
++  .phone { width: 300px; min-height: 600px; display: flex; flex-direction: column; }
++  .desk { width: 860px; max-width: 100%; min-height: 470px; display: grid; grid-template-columns: 170px 1fr; }
++  .bar { border-bottom: 1.5px solid var(--line); padding: 10px 12px; font-weight: 600; display: flex; justify-content: space-between; }
++  .body { padding: 12px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
++  .nav { border-top: 1.5px solid var(--line); display: grid; grid-template-columns: repeat(5, 1fr); font-size: 11px; text-align: center; }
++  .nav span { padding: 8px 0; } .nav .on { background: var(--soft); font-weight: 600; }
++  .chips { display: flex; gap: 6px; flex-wrap: wrap; } .chip { border: 1.5px solid var(--line); border-radius: 999px; padding: 2px 9px; font-size: 12px; }
++  .chip.on { background: var(--soft); border-color: var(--ink); }
++  .card { border: 1.5px solid var(--line); border-radius: 10px; padding: 9px; display: flex; flex-direction: column; gap: 4px; }
++  .line { height: 9px; background: var(--soft); border-radius: 4px; } .w60{width:60%} .w40{width:40%} .w80{width:80%}
++  .btn { border: 2px solid var(--ink); border-radius: 8px; text-align: center; padding: 7px; font-weight: 600; font-size: 13px; }
++  .btn.ghost { border-style: dashed; color: #6b7280; }
++  .tag { align-self: flex-start; font-size: 11px; border: 1.5px solid var(--ink); border-radius: 999px; padding: 0 7px; }
++  .box { border: 2px dashed var(--line); border-radius: 10px; display: grid; place-items: center; color: #6b7280; background: var(--fill); }
++  .note { color: var(--note); font-size: 12px; border-left: 3px solid var(--note); padding-left: 6px; }
++  .side { border-right: 1.5px solid var(--line); padding: 12px 10px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
++  .side .on { background: var(--soft); border-radius: 6px; padding: 4px 6px; font-weight: 600; }
++  .main { padding: 14px 18px; display: flex; flex-direction: column; gap: 10px; }
++  .tabs { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1.5px solid var(--line); text-align: center; }
++  .tabs span { padding: 6px; } .tabs .on { border-bottom: 3px solid var(--ink); font-weight: 600; }
++  .field { border: 1.5px solid var(--line); border-radius: 8px; padding: 8px 10px; color: #6b7280; }
++  .result { border: 3px solid var(--ink); border-radius: 12px; padding: 14px; text-align: center; }
++  .result b { display: block; font-size: 22px; letter-spacing: .5px; }
++  .ok { background: repeating-linear-gradient(135deg, #fff, #fff 8px, #f3f4f6 8px, #f3f4f6 16px); }
++  .bad { background: repeating-linear-gradient(45deg, #fff, #fff 4px, #e5e7eb 4px, #e5e7eb 8px); }
++  .cap { font-size: 12px; color: #4b5563; margin-top: 6px; max-width: 300px; }
++  ul.small { margin: 2px 0 0 16px; padding: 0; font-size: 12px; }
++  @media print { body { padding: 0; } .frame { break-inside: avoid; } }
++</style>
++</head>
++<body>
++<h1>Wireframe luồng sử dụng voucher</h1>
++<p class="lead">Wireframe low-fidelity cho task 4 (3 màn app khách) và task 5 (2 màn web cửa hàng). Chữ màu cam là ghi chú yêu cầu (SRS). Giao diện thật đã làm theo bố cục này. Có thể in trang thành PDF để đưa vào báo cáo.</p>
++
++<h2>App khách hàng (task 4)</h2>
++<div class="row">
++  <div>
++    <div class="frame phone">
++      <div class="bar">Ví voucher</div>
++      <div class="body">
++        <div class="note">Mất mạng: banner "Đang xem ví đã lưu lúc …" (SQLite), ẩn nút tạo mã (LIM-07)</div>
++        <div class="chips"><span class="chip on">Đang hiệu lực</span><span class="chip">Đã dùng</span><span class="chip">Hết hạn</span><span class="chip">Đã hoàn</span></div>
++        <div class="card"><div style="display:flex;justify-content:space-between"><b>Tên voucher</b><span class="tag">Đang hiệu lực</span></div>
++          <div class="line w60"></div><div class="line w40"></div><div class="btn">Sử dụng ngay</div></div>
++        <div class="card"><div style="display:flex;justify-content:space-between"><b>Tên voucher</b><span class="tag">Đang hoàn tiền</span></div>
++          <div class="line w60"></div><div class="line w40"></div>
++          <div class="note">REFUND_PENDING nằm ở tab Đang hiệu lực, không có nút dùng</div></div>
++        <div class="note">Chạm vào thẻ → chi tiết voucher đã mua · Kéo xuống để tải lại</div>
++      </div>
++      <div class="nav"><span>Khám phá</span><span>Tìm kiếm</span><span class="on">Ví</span><span>Đơn hàng</span><span>Cá nhân</span></div>
++    </div>
++    <div class="cap"><b>1. Ví voucher (FR-REDEEM-01).</b> 4 tab. Hết hạn xét theo expireAt, không chờ job.</div>
++  </div>
++
++  <div>
++    <div class="frame phone">
++      <div class="bar">← Chi tiết voucher</div>
++      <div class="body">
++        <div class="card"><div style="display:flex;justify-content:space-between"><b>Tên voucher</b><span class="tag">Trạng thái</span></div>
++          <div class="line w60"></div><div class="line w80"></div><div class="line w40"></div></div>
++        <div class="btn">Sử dụng ngay</div>
++        <div class="card"><b>Chi nhánh áp dụng</b><div class="line w80"></div><div class="line w60"></div></div>
++        <div class="card"><b>Hoàn tiền</b><div>Hạn chót: dd/MM/yyyy HH:mm</div>
++          <div class="btn ghost">Yêu cầu hoàn tiền</div>
++          <div class="note">Không đủ điều kiện: khóa nút + nêu lý do (FR-REFUND-04)</div></div>
++        <div class="card"><b>Đánh giá</b><div class="note">Chỉ hiện khi đã dùng và chưa đánh giá (BR-10)</div></div>
++      </div>
++    </div>
++    <div class="cap"><b>2. Chi tiết voucher đã mua.</b> Chỉ chủ sở hữu xem được.</div>
++  </div>
++
++  <div>
++    <div class="frame phone">
++      <div class="bar">← Sử dụng voucher</div>
++      <div class="body" style="align-items:center;text-align:center">
++        <b>Tên voucher</b>
++        <div class="box" style="width:200px;height:200px">QR động</div>
++        <b>Còn hiệu lực 57s</b>
++        <div style="font-size:12px;color:#6b7280">Mã OTP thay thế</div>
++        <div style="font-size:28px;font-weight:800;letter-spacing:6px">123 456</div>
++        <div class="btn" style="width:100%">Làm mới mã</div>
++        <div class="note" style="text-align:left">Hết 60 giây tự làm mới · giữ màn hình sáng · nhân viên xác nhận xong → "Voucher đã được sử dụng"</div>
++      </div>
++    </div>
++    <div class="cap"><b>3. Mã QR + OTP (FR-REDEEM-02/03).</b> Token HMAC, hạn 60 giây, tối đa 10 lần / 10 phút.</div>
++  </div>
++</div>
++
++<h2>Web cửa hàng (task 5)</h2>
++<div class="row">
++  <div>
++    <div class="frame desk">
++      <div class="side"><b>Web cửa hàng</b><span class="on">Xác nhận sử dụng</span><span>Lịch sử trong ngày</span><span>Đổi chi nhánh</span></div>
++      <div class="main">
++        <div style="display:flex;justify-content:space-between"><b>Xác nhận sử dụng voucher</b><span class="tag">Chi nhánh đang làm</span></div>
++        <div class="tabs"><span class="on">Quét QR</span><span>Nhập OTP</span></div>
++        <div class="field">Giá trị hóa đơn (VND) <span class="note">bắt buộc với voucher mệnh giá (BR-03)</span></div>
++        <div class="box" style="height:190px">Khung camera</div>
++        <div class="btn">Bật / tắt camera</div>
++        <div class="note">Tab OTP: ô 6 số + nút Xác nhận; sai 5 lần / 5 phút → khóa ô OTP 15 phút, quét QR vẫn được</div>
++      </div>
++    </div>
++    <div class="cap" style="max-width:860px"><b>4. Màn quét (FR-REDEEM-05/06).</b> Nút lớn, thao tác ít.</div>
++  </div>
++
++  <div>
++    <div class="frame desk">
++      <div class="side"><b>Web cửa hàng</b><span class="on">Xác nhận sử dụng</span><span>Lịch sử trong ngày</span><span>Đổi chi nhánh</span></div>
++      <div class="main">
++        <div class="row" style="gap:14px">
++          <div class="result ok" style="flex:1;min-width:220px">✓<b>HỢP LỆ</b>Tên voucher · mã · giờ · hóa đơn</div>
++          <div class="result bad" style="flex:1;min-width:220px">✕<b>ĐÃ SỬ DỤNG</b>Đã dùng lúc HH:mm dd/MM tại …</div>
++        </div>
++        <div class="row" style="gap:14px">
++          <div class="result bad" style="flex:1;min-width:220px">✕<b>SAI CHI NHÁNH</b>Áp dụng tại:<ul class="small"><li>Chi nhánh A — địa chỉ</li><li>Chi nhánh B — địa chỉ</li></ul></div>
++          <div class="result bad" style="flex:1;min-width:220px">✕<b>HẾT HẠN / CHỜ HOÀN</b>Mã hết hiệu lực · voucher đang chờ hoàn</div>
++        </div>
++        <div class="btn">→ Khách tiếp theo</div>
++        <div class="note">Đọc được trong 1 giây (NFR-USA-03). Thiếu hóa đơn: không hiện màn đỏ, giữ mã và nút "Gửi lại kèm hóa đơn".</div>
++      </div>
++    </div>
++    <div class="cap" style="max-width:860px"><b>5. Màn kết quả (FR-REDEEM-07).</b> Xanh hoặc đỏ, nêu rõ lý do.</div>
++  </div>
++</div>
++</body>
++</html>
+diff --git a/render.yaml b/render.yaml
+index 1b846b1..16fb3fe 100644
+--- a/render.yaml
++++ b/render.yaml
+@@ -50,6 +50,14 @@ services:
+         value: "7"
+       - key: REFUND_MIN_DAYS_BEFORE_EXPIRE
+         value: "3"
++      # F10/F11: khoa ky ma QR redeem do Render tu sinh, khong nam trong repo
++      - key: REDEEM_HMAC_SECRET
++        generateValue: true
++      # F12: auto = goi cong hoan (dang dung cong gia lap sandbox), manual = vao hang doi quan tri
++      - key: REFUND_MODE
++        value: auto
++      - key: REFUND_SANDBOX_RESULT
++        value: success
+       - key: DEFAULT_COMMISSION_RATE
+         value: "0.1"
+       - key: PAYMENT_GATEWAY
+diff --git a/src/app.module.ts b/src/app.module.ts
+index bd5f665..c0a4cc7 100644
+--- a/src/app.module.ts
++++ b/src/app.module.ts
+@@ -15,6 +15,7 @@ import { SettlementModule } from './modules/settlement/settlement.module';
+ import { ReportModule } from './modules/report/report.module';
+ import { EngageModule } from './modules/engage/engage.module';
+ import { NotificationModule } from './modules/notification/notification.module';
++import { WalletModule } from './modules/wallet/wallet.module';
+ 
+ @Module({
+   imports: [
+@@ -34,6 +35,7 @@ import { NotificationModule } from './modules/notification/notification.module';
+     ReportModule,
+     EngageModule,
+     NotificationModule,
++    WalletModule,
+   ],
+   controllers: [HealthController],
+ })
+diff --git a/src/common/exceptions/business.exception.ts b/src/common/exceptions/business.exception.ts
+new file mode 100644
+index 0000000..58eab70
+--- /dev/null
++++ b/src/common/exceptions/business.exception.ts
+@@ -0,0 +1,15 @@
++import { HttpException, HttpStatus } from '@nestjs/common';
++
++// Loi nghiep vu co ma ly do (reason) va du lieu kem theo (details) de client hien thong bao cu the,
++// vd. redeem that bai vi "da dung luc ... tai ...", "sai chi nhanh" kem danh sach chi nhanh ap dung.
++// AllExceptionsFilter dua reason / details vao error cua dinh dang { data, error, meta } (F01).
++export class BusinessException extends HttpException {
++  constructor(
++    readonly reason: string,
++    message: string,
++    readonly details: Record<string, unknown> | null = null,
++    status: HttpStatus = HttpStatus.BAD_REQUEST,
++  ) {
++    super({ message, reason, details }, status);
++  }
++}
+diff --git a/src/common/filters/http-exception.filter.ts b/src/common/filters/http-exception.filter.ts
+index d8a2c81..294103f 100644
+--- a/src/common/filters/http-exception.filter.ts
++++ b/src/common/filters/http-exception.filter.ts
+@@ -6,6 +6,7 @@ import {
+   HttpStatus,
+ } from '@nestjs/common';
+ import { Request, Response } from 'express';
++import { BusinessException } from '../exceptions/business.exception';
+ 
+ // Chuan hoa loi tra ve theo dinh dang { data, error, meta } (F01), khong ro ri thong tin ky thuat - NFR-USA-02.
+ // error.message luon la chuoi de hien thang cho nguoi dung; loi validation nhieu dong duoc noi bang xuong dong.
+@@ -31,6 +32,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
+       error: {
+         code: status,
+         message,
++        // Loi nghiep vu (BusinessException): ma ly do + du lieu kem theo cho client hien chi tiet
++        ...(exception instanceof BusinessException
++          ? { reason: exception.reason, details: exception.details }
++          : {}),
+         path: request.url,
+         timestamp: new Date().toISOString(),
+       },
+diff --git a/src/common/interceptors/response-envelope.interceptor.ts b/src/common/interceptors/response-envelope.interceptor.ts
+index 1e6a343..68445b1 100644
+--- a/src/common/interceptors/response-envelope.interceptor.ts
++++ b/src/common/interceptors/response-envelope.interceptor.ts
+@@ -7,7 +7,15 @@ import { Observable, map } from 'rxjs';
+ //  - Loi: data = null, error = { code, message, path, timestamp } (xem AllExceptionsFilter).
+ export interface ApiEnvelope<T = unknown> {
+   data: T | null;
+-  error: { code: number; message: string; path: string; timestamp: string } | null;
++  error: {
++    code: number;
++    message: string;
++    // chi co voi loi nghiep vu (BusinessException)
++    reason?: string;
++    details?: Record<string, unknown> | null;
++    path: string;
++    timestamp: string;
++  } | null;
+   meta: PageMeta | null;
+ }
+ 
+diff --git a/src/common/utils/vn-time.ts b/src/common/utils/vn-time.ts
+new file mode 100644
+index 0000000..eed8856
+--- /dev/null
++++ b/src/common/utils/vn-time.ts
+@@ -0,0 +1,22 @@
++// Gio Viet Nam (UTC+7, khong doi gio mua he). May chu tren Render chay UTC nen tu quy doi,
++// khong phu thuoc mui gio cua may chu.
++const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
++const DAY_MS = 24 * 60 * 60 * 1000;
++
++const pad = (n: number) => String(n).padStart(2, '0');
++
++// "14:05 21/10/2026" - dung trong thong bao loi tra ve cho nguoi dung
++export function formatVnDateTime(d: Date): string {
++  const v = new Date(d.getTime() + VN_OFFSET_MS);
++  return `${pad(v.getUTCHours())}:${pad(v.getUTCMinutes())} ${pad(v.getUTCDate())}/${pad(v.getUTCMonth() + 1)}/${v.getUTCFullYear()}`;
++}
++
++// 00:00 hom nay theo gio Viet Nam (lich su redeem "trong ngay" - FR-REDEEM-10)
++export function startOfVnDay(now = new Date()): Date {
++  return new Date(Math.floor((now.getTime() + VN_OFFSET_MS) / DAY_MS) * DAY_MS - VN_OFFSET_MS);
++}
++
++export function envInt(name: string, fallback: number): number {
++  const v = parseInt(process.env[name] || '', 10);
++  return Number.isFinite(v) && v > 0 ? v : fallback;
++}
+diff --git a/src/entities/redeem-token.entity.ts b/src/entities/redeem-token.entity.ts
+index 0e86dc4..d4f5ff9 100644
+--- a/src/entities/redeem-token.entity.ts
++++ b/src/entities/redeem-token.entity.ts
+@@ -2,6 +2,7 @@ import {
+   Column,
+   CreateDateColumn,
+   Entity,
++  Index,
+   JoinColumn,
+   ManyToOne,
+   PrimaryGeneratedColumn,
+@@ -26,7 +27,9 @@ export class RedeemToken {
+   @Column({ unique: true })
+   nonce: string;
+ 
+-  // ma OTP 6 chu so tuong ung, dung khi khong quet duoc QR - FR-REDEEM-03
++  // ma OTP 6 chu so tuong ung, dung khi khong quet duoc QR - FR-REDEEM-03.
++  // Index: nhan vien nhap OTP thi tra cuu theo otpCode, can phan hoi duoi 1 giay (FR-REDEEM-06)
++  @Index()
+   @Column()
+   otpCode: string;
+ 
+diff --git a/src/modules/engage/dto/create-review.dto.ts b/src/modules/engage/dto/create-review.dto.ts
+index adc010f..623e9e4 100644
+--- a/src/modules/engage/dto/create-review.dto.ts
++++ b/src/modules/engage/dto/create-review.dto.ts
+@@ -1,13 +1,23 @@
+ import { ApiProperty } from '@nestjs/swagger';
+-import { IsInt, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
++import { Type } from 'class-transformer';
++import { IsIn, IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min } from 'class-validator';
++import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
++import { ReviewStatus } from '../../../common/enums/status.enum';
+ 
+-// FR-ENGAGE-02/03
++// FR-ENGAGE-02/03: danh gia chien dich. Gui campaignId (app moi) hoac voucherItemId (tuong thich ban cu).
+ export class CreateReviewDto {
+-  @ApiProperty()
++  @ApiProperty({ required: false })
++  @IsOptional()
+   @IsUUID()
+-  voucherItemId: string;
++  campaignId?: string;
++
++  @ApiProperty({ required: false })
++  @IsOptional()
++  @IsUUID()
++  voucherItemId?: string;
+ 
+   @ApiProperty({ minimum: 1, maximum: 5 })
++  @Type(() => Number)
+   @IsInt()
+   @Min(1)
+   @Max(5)
+@@ -16,5 +26,36 @@ export class CreateReviewDto {
+   @ApiProperty({ required: false })
+   @IsOptional()
+   @IsString()
++  @MaxLength(1000)
+   comment?: string;
+ }
++
++// FR-ENGAGE-04: thuong hieu phan hoi mot lan
++export class ReplyReviewDto {
++  @ApiProperty()
++  @IsString()
++  @Matches(/\S/, { message: 'Nội dung phản hồi không được để trống.' })
++  @MaxLength(1000)
++  reply: string;
++}
++
++// FR-ENGAGE-05: quan tri vien an danh gia vi pham, ghi ly do vao AuditLog
++export class HideReviewDto {
++  @ApiProperty()
++  @IsString()
++  @Matches(/\S/, { message: 'Vui lòng nhập lý do ẩn đánh giá.' })
++  @MaxLength(500)
++  reason: string;
++}
++
++export class AdminReviewQueryDto extends PaginationQueryDto {
++  @ApiProperty({ required: false, enum: ReviewStatus })
++  @IsOptional()
++  @IsIn(Object.values(ReviewStatus))
++  status?: ReviewStatus;
++
++  @ApiProperty({ required: false })
++  @IsOptional()
++  @IsUUID()
++  brandId?: string;
++}
+diff --git a/src/modules/engage/engage.controller.ts b/src/modules/engage/engage.controller.ts
+index e640156..40507cf 100644
+--- a/src/modules/engage/engage.controller.ts
++++ b/src/modules/engage/engage.controller.ts
+@@ -1,7 +1,8 @@
+ import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+ import { EngageService } from './engage.service';
+-import { CreateReviewDto } from './dto/create-review.dto';
++import { ReviewService } from './review.service';
++import { CreateReviewDto, ReplyReviewDto } from './dto/create-review.dto';
+ import { CreateFavoriteDto } from './dto/create-favorite.dto';
+ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+ import { BrandResourceGuard } from '../../common/guards/brand-resource.guard';
+@@ -15,24 +16,27 @@ import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current
+ @UseGuards(JwtAuthGuard, RolesGuard, BrandResourceGuard)
+ @Controller()
+ export class EngageController {
+-  constructor(private readonly engageService: EngageService) {}
++  constructor(
++    private readonly engageService: EngageService,
++    private readonly reviewService: ReviewService,
++  ) {}
+ 
+   @Roles(Role.CUSTOMER)
+   @Post('reviews')
+   createReview(@CurrentUser() user: CurrentUserPayload, @Body() dto: CreateReviewDto) {
+-    return this.engageService.createReview(user.userId, dto);
++    return this.reviewService.create(user.userId, dto);
+   }
+ 
+   @Roles(Role.BRAND_OWNER)
+   @Patch('reviews/:id/reply')
+-  reply(@Param('id') id: string, @Body('reply') reply: string) {
+-    return this.engageService.replyReview(id, reply);
++  reply(@Param('id') id: string, @Body() dto: ReplyReviewDto) {
++    return this.reviewService.reply(id, dto.reply);
+   }
+ 
+   @Roles(Role.BRAND_OWNER, Role.CUSTOMER, Role.ADMIN)
+   @Get('brands/:brandId/reviews')
+   listByBrand(@Param('brandId') brandId: string) {
+-    return this.engageService.listReviewsByBrand(brandId);
++    return this.reviewService.listByBrand(brandId);
+   }
+ 
+   @Roles(Role.CUSTOMER)
+diff --git a/src/modules/engage/engage.module.ts b/src/modules/engage/engage.module.ts
+index 86ab067..eacb303 100644
+--- a/src/modules/engage/engage.module.ts
++++ b/src/modules/engage/engage.module.ts
+@@ -5,12 +5,15 @@ import { Favorite } from '../../entities/favorite.entity';
+ import { VoucherItem } from '../../entities/voucher-item.entity';
+ import { EngageController } from './engage.controller';
+ import { EngageService } from './engage.service';
++import { ReviewController } from './review.controller';
++import { ReviewService } from './review.service';
+ 
+ @Module({
+   imports: [
+     TypeOrmModule.forFeature([Review, Favorite, VoucherItem]),
+   ],
+-  controllers: [EngageController],
+-  providers: [EngageService],
++  controllers: [EngageController, ReviewController],
++  providers: [EngageService, ReviewService],
++  exports: [ReviewService],
+ })
+ export class EngageModule {}
+diff --git a/src/modules/engage/engage.service.ts b/src/modules/engage/engage.service.ts
+index 521ec3a..8cae3a1 100644
+--- a/src/modules/engage/engage.service.ts
++++ b/src/modules/engage/engage.service.ts
+@@ -1,55 +1,13 @@
+-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
++import { Injectable } from '@nestjs/common';
+ import { InjectRepository } from '@nestjs/typeorm';
+ import { Repository } from 'typeorm';
+-import { Review } from '../../entities/review.entity';
+ import { Favorite } from '../../entities/favorite.entity';
+-import { VoucherItem } from '../../entities/voucher-item.entity';
+-import { VoucherItemStatus } from '../../common/enums/status.enum';
+-import { CreateReviewDto } from './dto/create-review.dto';
+ import { CreateFavoriteDto } from './dto/create-favorite.dto';
+ 
++// Yeu thich (FR-ENGAGE-01). Danh gia nam o ReviewService (F15).
+ @Injectable()
+ export class EngageService {
+-  constructor(
+-    @InjectRepository(Review) private readonly reviewRepo: Repository<Review>,
+-    @InjectRepository(Favorite) private readonly favoriteRepo: Repository<Favorite>,
+-    @InjectRepository(VoucherItem) private readonly voucherItemRepo: Repository<VoucherItem>,
+-  ) {}
+-
+-  // FR-ENGAGE-02/03, BR-10: chi voucher da redeem moi duoc danh gia, moi voucher mot lan
+-  async createReview(userId: string, dto: CreateReviewDto) {
+-    const item = await this.voucherItemRepo.findOne({ where: { id: dto.voucherItemId } });
+-    if (!item || item.userId !== userId) throw new NotFoundException('Khong tim thay voucher.');
+-    if (item.status !== VoucherItemStatus.USED) {
+-      throw new BadRequestException('Chi voucher da su dung moi duoc danh gia.');
+-    }
+-    // DC-09: moi khach mot danh gia cho moi chien dich
+-    const existing = await this.reviewRepo.findOne({ where: { userId, campaignId: item.campaignId } });
+-    if (existing) throw new BadRequestException('Ban da danh gia chien dich nay.');
+-
+-    const review = this.reviewRepo.create({
+-      campaignId: item.campaignId,
+-      voucherItemId: item.id,
+-      userId,
+-      rating: dto.rating,
+-      comment: dto.comment,
+-    });
+-    return this.reviewRepo.save(review);
+-  }
+-
+-  // FR-ENGAGE-04: thuong hieu phan hoi cong khai mot lan cho moi danh gia
+-  async replyReview(reviewId: string, reply: string) {
+-    const review = await this.reviewRepo.findOne({ where: { id: reviewId } });
+-    if (!review) throw new NotFoundException('Khong tim thay danh gia.');
+-    if (review.brandReply) throw new BadRequestException('Danh gia nay da duoc phan hoi.');
+-    review.brandReply = reply;
+-    review.brandRepliedAt = new Date();
+-    return this.reviewRepo.save(review);
+-  }
+-
+-  listReviewsByBrand(brandId: string) {
+-    return this.reviewRepo.find({ where: { campaign: { brandId } }, order: { createdAt: 'DESC' } });
+-  }
++  constructor(@InjectRepository(Favorite) private readonly favoriteRepo: Repository<Favorite>) {}
+ 
+   // FR-ENGAGE-01
+   async toggleFavorite(userId: string, dto: CreateFavoriteDto) {
+@@ -67,5 +25,4 @@ export class EngageService {
+   listFavorites(userId: string) {
+     return this.favoriteRepo.find({ where: { userId } });
+   }
+-
+ }
+diff --git a/src/modules/engage/review.controller.ts b/src/modules/engage/review.controller.ts
+new file mode 100644
+index 0000000..f1bc61b
+--- /dev/null
++++ b/src/modules/engage/review.controller.ts
+@@ -0,0 +1,56 @@
++import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Query, UseGuards } from '@nestjs/common';
++import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
++import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
++import { RolesGuard } from '../../common/guards/roles.guard';
++import { Roles } from '../../common/decorators/roles.decorator';
++import { Role } from '../../common/enums/role.enum';
++import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
++import { PaginationQueryDto } from '../../common/dto/pagination.dto';
++import { AdminReviewQueryDto, HideReviewDto } from './dto/create-review.dto';
++import { ReviewService } from './review.service';
++
++// F15: danh gia theo chien dich (cong khai) va kiem duyet cua quan tri vien.
++// Tao / phan hoi danh gia nam o EngageController (co BrandResourceGuard kiem tra quyen thuong hieu).
++@ApiTags('review')
++@Controller()
++export class ReviewController {
++  constructor(private readonly reviewService: ReviewService) {}
++
++  // Guest cung xem duoc (giong chi tiet voucher - FR-SEARCH-07)
++  @Get('campaigns/:id/reviews')
++  listByCampaign(@Param('id', ParseUUIDPipe) id: string, @Query() q: PaginationQueryDto) {
++    return this.reviewService.listByCampaign(id, q);
++  }
++
++  @ApiBearerAuth()
++  @UseGuards(JwtAuthGuard, RolesGuard)
++  @Roles(Role.CUSTOMER)
++  @Get('campaigns/:id/reviews/eligibility')
++  eligibility(@CurrentUser() user: CurrentUserPayload, @Param('id', ParseUUIDPipe) id: string) {
++    return this.reviewService.eligibility(user.userId, id);
++  }
++
++  @ApiBearerAuth()
++  @UseGuards(JwtAuthGuard, RolesGuard)
++  @Roles(Role.ADMIN)
++  @Get('admin/reviews')
++  listAdmin(@Query() q: AdminReviewQueryDto) {
++    return this.reviewService.listAdmin(q);
++  }
++
++  @ApiBearerAuth()
++  @UseGuards(JwtAuthGuard, RolesGuard)
++  @Roles(Role.ADMIN)
++  @Patch('admin/reviews/:id/hide')
++  hide(@CurrentUser() user: CurrentUserPayload, @Param('id', ParseUUIDPipe) id: string, @Body() dto: HideReviewDto) {
++    return this.reviewService.hide(id, user.userId, dto.reason);
++  }
++
++  @ApiBearerAuth()
++  @UseGuards(JwtAuthGuard, RolesGuard)
++  @Roles(Role.ADMIN)
++  @Patch('admin/reviews/:id/unhide')
++  unhide(@CurrentUser() user: CurrentUserPayload, @Param('id', ParseUUIDPipe) id: string) {
++    return this.reviewService.unhide(id, user.userId);
++  }
++}
+diff --git a/src/modules/engage/review.service.ts b/src/modules/engage/review.service.ts
+new file mode 100644
+index 0000000..61504ab
+--- /dev/null
++++ b/src/modules/engage/review.service.ts
+@@ -0,0 +1,208 @@
++import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
++import { InjectRepository } from '@nestjs/typeorm';
++import { DataSource, QueryFailedError, Repository } from 'typeorm';
++import { Review } from '../../entities/review.entity';
++import { VoucherItem } from '../../entities/voucher-item.entity';
++import { AuditLog } from '../../entities/audit-log.entity';
++import { User } from '../../entities/user.entity';
++import { ReviewStatus, VoucherItemStatus } from '../../common/enums/status.enum';
++import { BusinessException } from '../../common/exceptions/business.exception';
++import { PaginationQueryDto, skipTake, toPage } from '../../common/dto/pagination.dto';
++import { AdminReviewQueryDto, CreateReviewDto } from './dto/create-review.dto';
++
++const NOT_ELIGIBLE = 'Bạn cần sử dụng ít nhất một voucher của chiến dịch này trước khi đánh giá (BR-10).';
++
++// Ten nguoi danh gia hien cong khai: "Trần Gia Hân" -> "Hân T.", khong lo ho ten day du / email
++export function reviewerName(user?: Pick<User, 'fullName' | 'email'> | null): string {
++  const words = user?.fullName?.trim().split(/\s+/).filter(Boolean) ?? [];
++  if (words.length >= 2) return `${words[words.length - 1]} ${words[0][0]}.`;
++  if (words.length === 1) return words[0];
++  const local = user?.email?.split('@')[0] ?? '';
++  return local ? `${local.slice(0, 2)}***` : 'Khách hàng';
++}
++
++// F15 - danh gia chien dich (FR-ENGAGE-02..05, BR-10, DC-09)
++@Injectable()
++export class ReviewService {
++  constructor(
++    @InjectRepository(Review) private readonly reviewRepo: Repository<Review>,
++    @InjectRepository(VoucherItem) private readonly voucherItemRepo: Repository<VoucherItem>,
++    private readonly dataSource: DataSource,
++  ) {}
++
++  // BR-10: khach co it nhat 1 voucher USED cua chien dich; DC-09: moi khach 1 danh gia / chien dich
++  async create(userId: string, dto: CreateReviewDto) {
++    if (!dto.campaignId && !dto.voucherItemId) {
++      throw new BadRequestException('Cần gửi chiến dịch (campaignId) cần đánh giá.');
++    }
++    let item: VoucherItem | null;
++    if (dto.voucherItemId) {
++      item = await this.voucherItemRepo.findOne({ where: { id: dto.voucherItemId } });
++      if (!item || item.userId !== userId) throw new NotFoundException('Không tìm thấy voucher.');
++      if (dto.campaignId && dto.campaignId !== item.campaignId) {
++        throw new BusinessException('REVIEW_NOT_ELIGIBLE', 'Voucher không thuộc chiến dịch này.');
++      }
++      if (item.status !== VoucherItemStatus.USED) throw new BusinessException('REVIEW_NOT_ELIGIBLE', NOT_ELIGIBLE);
++    } else {
++      item = await this.latestUsedVoucher(userId, dto.campaignId!);
++      if (!item) throw new BusinessException('REVIEW_NOT_ELIGIBLE', NOT_ELIGIBLE);
++    }
++
++    if (await this.reviewRepo.findOne({ where: { userId, campaignId: item.campaignId } })) {
++      throw new BusinessException('REVIEW_EXISTS', 'Bạn đã đánh giá chiến dịch này.');
++    }
++    try {
++      return await this.reviewRepo.save(
++        this.reviewRepo.create({
++          campaignId: item.campaignId,
++          voucherItemId: item.id,
++          userId,
++          rating: dto.rating,
++          comment: dto.comment?.trim() || undefined,
++        }),
++      );
++    } catch (e) {
++      // Hai lan gui cung luc: rang buoc duy nhat (userId, campaignId) chan ban ghi thu hai
++      if (e instanceof QueryFailedError) throw new BusinessException('REVIEW_EXISTS', 'Bạn đã đánh giá chiến dịch này.');
++      throw e;
++    }
++  }
++
++  // App chi hien nut "Đánh giá" khi canReview (khach chua dung voucher khong thay nut)
++  async eligibility(userId: string, campaignId: string) {
++    const existing = await this.reviewRepo.findOne({ where: { userId, campaignId } });
++    if (existing) {
++      return { canReview: false, reasonCode: 'REVIEW_EXISTS', reason: 'Bạn đã đánh giá chiến dịch này.', reviewId: existing.id };
++    }
++    if (!(await this.latestUsedVoucher(userId, campaignId))) {
++      return { canReview: false, reasonCode: 'REVIEW_NOT_ELIGIBLE', reason: NOT_ELIGIBLE, reviewId: null };
++    }
++    return { canReview: true, reasonCode: null, reason: null, reviewId: null };
++  }
++
++  private latestUsedVoucher(userId: string, campaignId: string) {
++    return this.voucherItemRepo.findOne({
++      where: { userId, campaignId, status: VoucherItemStatus.USED },
++      order: { usedAt: 'DESC' },
++    });
++  }
++
++  // Danh gia cong khai cua chien dich (khach / Guest): chi VISIBLE, kem diem trung binh
++  async listByCampaign(campaignId: string, q: PaginationQueryDto) {
++    const page = await this.reviewRepo.findAndCount({
++      where: { campaignId, status: ReviewStatus.VISIBLE },
++      relations: ['user'],
++      order: { createdAt: 'DESC' },
++      ...skipTake(q),
++    });
++    const summary = await this.summary(campaignId);
++    return { ...toPage([page[0].map((r) => this.toPublic(r)), page[1]], q), ...summary };
++  }
++
++  // Diem trung binh chi tinh danh gia khong bi an
++  async summary(campaignId: string) {
++    const raw = await this.reviewRepo
++      .createQueryBuilder('r')
++      .select('AVG(r.rating)', 'avg')
++      .addSelect('COUNT(r.id)', 'count')
++      .where('r.campaignId = :campaignId', { campaignId })
++      .andWhere('r.status = :status', { status: ReviewStatus.VISIBLE })
++      .getRawOne<{ avg: string | number | null; count: string | number }>();
++    const count = Number(raw?.count ?? 0);
++    return {
++      avgRating: count > 0 && raw?.avg !== null && raw?.avg !== undefined ? Math.round(Number(raw.avg) * 10) / 10 : null,
++      reviewCount: count,
++    };
++  }
++
++  // FR-ENGAGE-04: thuong hieu phan hoi cong khai mot lan (BrandResourceGuard da kiem tra quyen so huu)
++  async reply(reviewId: string, reply: string) {
++    const review = await this.reviewRepo.findOne({ where: { id: reviewId } });
++    if (!review) throw new NotFoundException('Không tìm thấy đánh giá.');
++    if (review.brandReply) throw new BusinessException('REVIEW_ALREADY_REPLIED', 'Đánh giá này đã được phản hồi.');
++    review.brandReply = reply.trim();
++    review.brandRepliedAt = new Date();
++    return this.reviewRepo.save(review);
++  }
++
++  // Portal thuong hieu: thay ca danh gia bi an (kem trang thai) de biet vi sao khong hien cong khai
++  async listByBrand(brandId: string) {
++    const reviews = await this.reviewRepo.find({
++      where: { campaign: { brandId } },
++      relations: ['campaign', 'user'],
++      order: { createdAt: 'DESC' },
++    });
++    return reviews.map((r) => this.toBrandView(r));
++  }
++
++  // ================= Quan tri vien (FR-ENGAGE-05) =================
++
++  async listAdmin(q: AdminReviewQueryDto) {
++    const qb = this.reviewRepo
++      .createQueryBuilder('r')
++      .leftJoinAndSelect('r.campaign', 'c')
++      .leftJoinAndSelect('c.brand', 'b')
++      .leftJoinAndSelect('r.user', 'u')
++      .orderBy('r.createdAt', 'DESC');
++    if (q.status) qb.andWhere('r.status = :status', { status: q.status });
++    if (q.brandId) qb.andWhere('c.brandId = :brandId', { brandId: q.brandId });
++    const { skip, take } = skipTake(q);
++    const [rows, total] = await qb.skip(skip).take(take).getManyAndCount();
++    return toPage(
++      [rows.map((r) => ({ ...this.toBrandView(r), brandId: r.campaign?.brandId ?? null, brandName: r.campaign?.brand?.name ?? null })), total],
++      q,
++    );
++  }
++
++  async hide(reviewId: string, actorUserId: string, reason: string) {
++    return this.setStatus(reviewId, actorUserId, ReviewStatus.HIDDEN, 'HIDE_REVIEW', reason.trim());
++  }
++
++  async unhide(reviewId: string, actorUserId: string) {
++    return this.setStatus(reviewId, actorUserId, ReviewStatus.VISIBLE, 'UNHIDE_REVIEW', null);
++  }
++
++  private async setStatus(reviewId: string, actorUserId: string, status: ReviewStatus, action: string, reason: string | null) {
++    const saved = await this.dataSource.transaction(async (manager) => {
++      const review = await manager.findOne(Review, { where: { id: reviewId }, lock: { mode: 'pessimistic_write' } });
++      if (!review) throw new NotFoundException('Không tìm thấy đánh giá.');
++      if (review.status === status) {
++        throw new BusinessException(
++          'REVIEW_STATUS_UNCHANGED',
++          status === ReviewStatus.HIDDEN ? 'Đánh giá đã bị ẩn trước đó.' : 'Đánh giá đang hiển thị.',
++        );
++      }
++      review.status = status;
++      await manager.save(review);
++      await manager.save(
++        AuditLog,
++        manager.create(AuditLog, { actorUserId, action, entityType: 'Review', entityId: reviewId, detail: reason ? { reason } : null }),
++      );
++      return review;
++    });
++    const full = await this.reviewRepo.findOneOrFail({ where: { id: saved.id }, relations: ['campaign', 'user'] });
++    return { ...this.toBrandView(full), ...(await this.summary(full.campaignId)) };
++  }
++
++  private toPublic(r: Review) {
++    return {
++      id: r.id,
++      campaignId: r.campaignId,
++      rating: r.rating,
++      comment: r.comment ?? null,
++      brandReply: r.brandReply ?? null,
++      brandRepliedAt: r.brandRepliedAt ?? null,
++      createdAt: r.createdAt,
++      reviewerName: reviewerName(r.user),
++    };
++  }
++
++  private toBrandView(r: Review) {
++    return {
++      ...this.toPublic(r),
++      voucherItemId: r.voucherItemId,
++      campaignTitle: r.campaign?.title ?? null,
++      status: r.status,
++    };
++  }
++}
+diff --git a/src/modules/order/order.controller.ts b/src/modules/order/order.controller.ts
+index fcd707f..b96e411 100644
+--- a/src/modules/order/order.controller.ts
++++ b/src/modules/order/order.controller.ts
+@@ -64,15 +64,6 @@ export class OrderController {
+     return this.orderService.retryPayment(user.userId, id);
+   }
+ 
+-  // FR-REDEEM-01: vi voucher cua khach hang (app Flutter tu chia tab theo trang thai)
+-  @ApiBearerAuth()
+-  @UseGuards(JwtAuthGuard, RolesGuard)
+-  @Roles(Role.CUSTOMER)
+-  @Get('wallet')
+-  myWallet(@CurrentUser() user: CurrentUserPayload) {
+-    return this.orderService.findMyVouchers(user.userId);
+-  }
+-
+   // Webhook JSON chung, ky HMAC-SHA256 (khong dung JWT)
+   @Post('orders/payment-webhook')
+   @HttpCode(200)
+diff --git a/src/modules/order/order.service.ts b/src/modules/order/order.service.ts
+index c21e354..948e7a0 100644
+--- a/src/modules/order/order.service.ts
++++ b/src/modules/order/order.service.ts
+@@ -158,16 +158,6 @@ export class OrderService {
+     return order;
+   }
+ 
+-  // FR-REDEEM-01: voucher cua khach kem thong tin chien dich; bo secretKey khoi response (NFR-SEC-05)
+-  async findMyVouchers(userId: string) {
+-    const items = await this.voucherItemRepo.find({
+-      where: { userId },
+-      relations: ['campaign'],
+-      order: { issuedAt: 'DESC' },
+-    });
+-    return items.map(({ secretKey: _secretKey, ...rest }) => rest);
+-  }
+-
+   // ================= Nhan ket qua thanh toan (FR-ORDER-05..08, BR-11, BR-18, BR-20, DC-04, DC-11) =================
+ 
+   // Webhook JSON chung: xac thuc chu ky truoc moi xu ly
+diff --git a/src/modules/redeem/dto/redeem.dto.ts b/src/modules/redeem/dto/redeem.dto.ts
+index 910d4f2..58623f6 100644
+--- a/src/modules/redeem/dto/redeem.dto.ts
++++ b/src/modules/redeem/dto/redeem.dto.ts
+@@ -1,5 +1,5 @@
+ import { ApiProperty } from '@nestjs/swagger';
+-import { IsNumber, IsOptional, IsString, IsUUID } from 'class-validator';
++import { IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min } from 'class-validator';
+ 
+ // FR-REDEEM-02: khach hang xin token QR dong
+ export class RequestTokenDto {
+@@ -8,24 +8,36 @@ export class RequestTokenDto {
+   voucherItemId: string;
+ }
+ 
+-// FR-REDEEM-05/06: nhan vien redeem bang QR (nonce) hoac OTP fallback
++// FR-REDEEM-05/06: nhan vien gui nguyen chuoi QR (may chu kiem chu ky) hoac OTP 6 so. Chi gui mot trong hai.
+ export class RedeemDto {
+   @ApiProperty()
+   @IsUUID()
+   storeId: string;
+ 
+-  @ApiProperty({ required: false, description: 'Chuoi ngau nhien lay tu QR' })
++  @ApiProperty({ required: false, description: 'Nguyen chuoi doc tu ma QR: v1.<nonce>.<expiresAtMs>.<chu ky>' })
+   @IsOptional()
+   @IsString()
+-  nonce?: string;
++  @MaxLength(200)
++  qrPayload?: string;
+ 
+   @ApiProperty({ required: false, description: 'Ma OTP 6 chu so, dung khi khong quet duoc QR' })
+   @IsOptional()
+-  @IsString()
++  @Matches(/^\d{6}$/, { message: 'Mã OTP gồm đúng 6 chữ số.' })
+   otpCode?: string;
+ 
+-  @ApiProperty({ required: false, description: 'Gia tri hoa don thuc te - FR-REDEEM-08' })
++  @ApiProperty({ required: false, description: 'Gia tri hoa don (VND); bat buoc voi voucher menh gia - BR-03' })
+   @IsOptional()
+-  @IsNumber()
++  @IsInt()
++  @Min(0)
++  @Max(10_000_000_000)
+   billAmount?: number;
+ }
++
++// FR-REDEEM-08: sua gia tri hoa don trong 10 phut sau khi xac nhan
++export class UpdateBillDto {
++  @ApiProperty()
++  @IsInt()
++  @Min(0)
++  @Max(10_000_000_000)
++  billAmount: number;
++}
+diff --git a/src/modules/redeem/redeem-token.ts b/src/modules/redeem/redeem-token.ts
+new file mode 100644
+index 0000000..674b81e
+--- /dev/null
++++ b/src/modules/redeem/redeem-token.ts
+@@ -0,0 +1,48 @@
++import * as crypto from 'crypto';
++
++// Ma QR dong (FR-REDEEM-02, NFR-SEC-02, BR-16): "v1.<nonce>.<expiresAtMs>.<chu ky>"
++//  - Khong chua id hay ma tra cuu cua voucher: voucher chi duoc xac dinh qua token luu tren may chu.
++//  - Chu ky = HMAC-SHA256(REDEEM_HMAC_SECRET, "v1.<nonce>.<expiresAtMs>"), ma hoa base64url.
++//  - Khoa chi doc tu bien moi truong; production thieu khoa thi khong khoi dong (xem RedeemService.onModuleInit).
++export const QR_VERSION = 'v1';
++const DEV_SECRET = 'dev-only-redeem-hmac-secret';
++
++export function redeemSecret(): string {
++  const secret = process.env.REDEEM_HMAC_SECRET;
++  if (secret) return secret;
++  if (process.env.NODE_ENV === 'production') {
++    throw new Error('Thieu bien moi truong REDEEM_HMAC_SECRET (khoa ky ma QR redeem).');
++  }
++  return DEV_SECRET;
++}
++
++export function newNonce(): string {
++  return crypto.randomBytes(16).toString('hex');
++}
++
++// OTP 6 chu so tu bo sinh so ngau nhien an toan (khong dung Math.random)
++export function newOtp(): string {
++  return crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
++}
++
++export function signQr(nonce: string, expiresAtMs: number, secret = redeemSecret()): string {
++  return crypto.createHmac('sha256', secret).update(`${QR_VERSION}.${nonce}.${expiresAtMs}`).digest('base64url');
++}
++
++export function buildQrPayload(nonce: string, expiresAt: Date, secret = redeemSecret()): string {
++  const exp = expiresAt.getTime();
++  return `${QR_VERSION}.${nonce}.${exp}.${signQr(nonce, exp, secret)}`;
++}
++
++// Tra ve nonce + han neu dung dinh dang va dung chu ky; null neu ma gia / sai dinh dang / bi sua
++export function verifyQrPayload(raw: string, secret = redeemSecret()): { nonce: string; expiresAt: Date } | null {
++  const parts = raw.trim().split('.');
++  if (parts.length !== 4 || parts[0] !== QR_VERSION) return null;
++  const [, nonce, expRaw, signature] = parts;
++  if (!/^[0-9a-f]{32}$/.test(nonce) || !/^\d{1,15}$/.test(expRaw)) return null;
++  const exp = Number(expRaw);
++  const expected = Buffer.from(signQr(nonce, exp, secret));
++  const given = Buffer.from(signature);
++  if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) return null;
++  return { nonce, expiresAt: new Date(exp) };
++}
+diff --git a/src/modules/redeem/redeem.controller.ts b/src/modules/redeem/redeem.controller.ts
+index 5e8287d..fdb0055 100644
+--- a/src/modules/redeem/redeem.controller.ts
++++ b/src/modules/redeem/redeem.controller.ts
+@@ -1,12 +1,13 @@
+-import { BadRequestException, Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
++import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
+ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+ import { RedeemService } from './redeem.service';
+-import { RequestTokenDto, RedeemDto } from './dto/redeem.dto';
++import { RequestTokenDto, RedeemDto, UpdateBillDto } from './dto/redeem.dto';
+ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+ import { RolesGuard } from '../../common/guards/roles.guard';
+ import { Roles } from '../../common/decorators/roles.decorator';
+ import { Role } from '../../common/enums/role.enum';
+ import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
++import { BusinessException } from '../../common/exceptions/business.exception';
+ 
+ @ApiTags('redeem')
+ @ApiBearerAuth()
+@@ -15,17 +16,22 @@ import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current
+ export class RedeemController {
+   constructor(private readonly redeemService: RedeemService) {}
+ 
++  // F10: khach sinh ma QR + OTP (60 giay)
+   @Roles(Role.CUSTOMER)
+   @Post('token')
+   requestToken(@CurrentUser() user: CurrentUserPayload, @Body() dto: RequestTokenDto) {
+     return this.redeemService.requestToken(user.userId, dto);
+   }
+ 
++  // F11: nhan vien xac nhan su dung tai chi nhanh dang lam trong phien
+   @Roles(Role.STORE_STAFF)
+   @Post()
+   redeem(@CurrentUser() user: CurrentUserPayload, @Body() dto: RedeemDto) {
+     if (!user.activeStoreId || user.activeStoreId !== dto.storeId) {
+-      throw new BadRequestException('Vui lòng chọn chi nhánh làm việc trong phiên trước khi sử dụng voucher.');
++      throw new BusinessException(
++        'STORE_NOT_SELECTED',
++        'Vui lòng chọn chi nhánh làm việc trong phiên trước khi sử dụng voucher.',
++      );
+     }
+     return this.redeemService.redeem(user.userId, dto);
+   }
+@@ -42,4 +48,15 @@ export class RedeemController {
+   historyToday(@CurrentUser() user: CurrentUserPayload) {
+     return this.redeemService.findStaffHistoryToday(user.userId);
+   }
++
++  // FR-REDEEM-08: sua gia tri hoa don trong 10 phut sau khi xac nhan
++  @Roles(Role.STORE_STAFF)
++  @Patch('logs/:id/bill')
++  updateBill(
++    @CurrentUser() user: CurrentUserPayload,
++    @Param('id', ParseUUIDPipe) id: string,
++    @Body() dto: UpdateBillDto,
++  ) {
++    return this.redeemService.updateBill(user.userId, id, dto.billAmount);
++  }
+ }
+diff --git a/src/modules/redeem/redeem.rules.spec.ts b/src/modules/redeem/redeem.rules.spec.ts
+new file mode 100644
+index 0000000..36d7fad
+--- /dev/null
++++ b/src/modules/redeem/redeem.rules.spec.ts
+@@ -0,0 +1,64 @@
++import { VoucherItemStatus, VoucherType } from '../../common/enums/status.enum';
++import { buildQrPayload, newNonce, newOtp, verifyQrPayload } from './redeem-token';
++import { billRequired, usageBlock } from './redeem.rules';
++
++const NOW = new Date('2026-10-21T07:00:00Z');
++const LATER = new Date('2026-12-31T00:00:00Z');
++
++describe('ma QR redeem (FR-REDEEM-02, NFR-SEC-02, BR-16)', () => {
++  const secret = 'test-secret';
++
++  it('ky va kiem lai dung chu ky; ma khong chua id voucher', () => {
++    const nonce = newNonce();
++    const exp = new Date(NOW.getTime() + 60000);
++    const payload = buildQrPayload(nonce, exp, secret);
++    expect(payload.startsWith('v1.')).toBe(true);
++    expect(payload.split('.')).toHaveLength(4);
++    expect(verifyQrPayload(payload, secret)).toEqual({ nonce, expiresAt: exp });
++  });
++
++  it('sua han dung, sua nonce, sai khoa hoac sai dinh dang deu bi tu choi', () => {
++    const nonce = newNonce();
++    const payload = buildQrPayload(nonce, new Date(NOW.getTime() + 60000), secret);
++    const [v, n, exp, sig] = payload.split('.');
++    expect(verifyQrPayload([v, n, String(Number(exp) + 600000), sig].join('.'), secret)).toBeNull();
++    expect(verifyQrPayload([v, newNonce(), exp, sig].join('.'), secret)).toBeNull();
++    expect(verifyQrPayload(payload, 'other-secret')).toBeNull();
++    expect(verifyQrPayload('abc', secret)).toBeNull();
++    expect(verifyQrPayload(`v2.${n}.${exp}.${sig}`, secret)).toBeNull();
++    // dinh dang cu "voucherItemId.nonce.exp.sig" khong con hop le
++    expect(verifyQrPayload(`99999999-0000-4000-8000-000000000001.${n}.${exp}.${sig}`, secret)).toBeNull();
++  });
++
++  it('OTP luon du 6 chu so', () => {
++    for (let i = 0; i < 200; i++) expect(newOtp()).toMatch(/^\d{6}$/);
++  });
++});
++
++describe('usageBlock: voucher co dung duoc khong', () => {
++  it('ACTIVE con han thi dung duoc', () => {
++    expect(usageBlock({ status: VoucherItemStatus.ACTIVE, expireAt: LATER }, NOW)).toBeNull();
++  });
++
++  it('ACTIVE qua expireAt thi het han ngay, khong cho job', () => {
++    const block = usageBlock({ status: VoucherItemStatus.ACTIVE, expireAt: new Date(NOW.getTime() - 1000) }, NOW);
++    expect(block?.reason).toBe('VOUCHER_EXPIRED');
++    expect(block?.details?.expireAt).toBeTruthy();
++  });
++
++  it.each([
++    [VoucherItemStatus.USED, 'VOUCHER_USED'],
++    [VoucherItemStatus.REFUND_PENDING, 'VOUCHER_REFUND_PENDING'],
++    [VoucherItemStatus.REFUNDED, 'VOUCHER_REFUNDED'],
++    [VoucherItemStatus.EXPIRED, 'VOUCHER_EXPIRED'],
++  ])('%s -> %s', (status, reason) => {
++    expect(usageBlock({ status, expireAt: LATER }, NOW)?.reason).toBe(reason);
++  });
++
++  it('BR-03: chi voucher menh gia bat buoc nhap hoa don', () => {
++    expect(billRequired(VoucherType.PREPAID, undefined)).toBe(true);
++    expect(billRequired(VoucherType.PREPAID, 0)).toBe(false);
++    expect(billRequired(VoucherType.DISCOUNT, undefined)).toBe(false);
++    expect(billRequired(VoucherType.COMBO, null)).toBe(false);
++  });
++});
+diff --git a/src/modules/redeem/redeem.rules.ts b/src/modules/redeem/redeem.rules.ts
+new file mode 100644
+index 0000000..e2e3c02
+--- /dev/null
++++ b/src/modules/redeem/redeem.rules.ts
+@@ -0,0 +1,41 @@
++import { VoucherItemStatus, VoucherType } from '../../common/enums/status.enum';
++import { formatVnDateTime } from '../../common/utils/vn-time';
++
++export interface UsageBlock {
++  reason: string;
++  message: string;
++  details: Record<string, unknown> | null;
++}
++
++// Voucher co dung duoc luc nay khong (sinh ma va xac nhan su dung). Het han xet theo expireAt, khong cho job.
++// VOUCHER_USED chi tra ly do chung; RedeemService bo sung "luc nao, o dau" tu RedemptionLog.
++export function usageBlock(item: { status: VoucherItemStatus; expireAt: Date }, now: Date): UsageBlock | null {
++  switch (item.status) {
++    case VoucherItemStatus.USED:
++      return { reason: 'VOUCHER_USED', message: 'Voucher đã được sử dụng.', details: null };
++    case VoucherItemStatus.REFUND_PENDING:
++      return {
++        reason: 'VOUCHER_REFUND_PENDING',
++        message: 'Voucher đang chờ hoàn tiền nên không thể sử dụng.',
++        details: null,
++      };
++    case VoucherItemStatus.REFUNDED:
++      return { reason: 'VOUCHER_REFUNDED', message: 'Voucher đã được hoàn tiền, không còn hiệu lực.', details: null };
++    default:
++      break;
++  }
++  const expireAt = new Date(item.expireAt);
++  if (item.status === VoucherItemStatus.EXPIRED || expireAt.getTime() <= now.getTime()) {
++    return {
++      reason: 'VOUCHER_EXPIRED',
++      message: `Voucher đã hết hạn sử dụng lúc ${formatVnDateTime(expireAt)}.`,
++      details: { expireAt: expireAt.toISOString() },
++    };
++  }
++  return null;
++}
++
++// BR-03: voucher menh gia (tra truoc) bat buoc nhap gia tri hoa don khi xac nhan su dung
++export function billRequired(voucherType: VoucherType, billAmount: number | null | undefined): boolean {
++  return voucherType === VoucherType.PREPAID && (billAmount === null || billAmount === undefined);
++}
+diff --git a/src/modules/redeem/redeem.service.ts b/src/modules/redeem/redeem.service.ts
+index cdcadbc..80113bd 100644
+--- a/src/modules/redeem/redeem.service.ts
++++ b/src/modules/redeem/redeem.service.ts
+@@ -1,20 +1,46 @@
+-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
++import { HttpStatus, Injectable, NotFoundException, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+ import { InjectRepository } from '@nestjs/typeorm';
+-import { DataSource, IsNull, Repository } from 'typeorm';
+-import * as crypto from 'crypto';
++import { DataSource, EntityManager, IsNull, MoreThan, Not, Repository } from 'typeorm';
+ import { RedeemToken } from '../../entities/redeem-token.entity';
+ import { VoucherItem } from '../../entities/voucher-item.entity';
+ import { RedemptionLog } from '../../entities/redemption-log.entity';
+ import { CampaignStore } from '../../entities/campaign-store.entity';
+ import { StaffAssignment } from '../../entities/staff-assignment.entity';
++import { AuditLog } from '../../entities/audit-log.entity';
+ import { RedeemMethod, VoucherItemStatus } from '../../common/enums/status.enum';
++import { BusinessException } from '../../common/exceptions/business.exception';
++import { envInt, formatVnDateTime, startOfVnDay } from '../../common/utils/vn-time';
+ import { RequestTokenDto, RedeemDto } from './dto/redeem.dto';
+ import { NotificationService } from '../notification/notification.service';
+ import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
+ import { Store } from '../../entities/store.entity';
++import { buildQrPayload, newNonce, newOtp, redeemSecret, verifyQrPayload } from './redeem-token';
++import { billRequired, usageBlock } from './redeem.rules';
++
++const MINUTE = 60 * 1000;
++
++// Ghi vao audit_logs: dem lan nhap sai OTP va thoi diem khoa (khong can bang moi, khong mat khi may chu khoi dong lai)
++const OTP_FAILED = 'REDEEM_OTP_FAILED';
++const OTP_LOCKED = 'REDEEM_OTP_LOCKED';
++
++type RedeemOutcome =
++  | { ok: true; result: RedeemResult; userId: string; campaignId: string }
++  | { ok: false; error: BusinessException; otpFailed?: boolean };
++
++export interface RedeemResult {
++  message: string;
++  redemptionLogId: string;
++  voucherItemId: string;
++  voucherCode: string;
++  redeemedAt: Date;
++  method: RedeemMethod;
++  billAmount: number | null;
++  billEditableUntil: Date;
++  campaign: { id: string; title: string; voucherType: string; faceValue: number };
++}
+ 
+ @Injectable()
+-export class RedeemService {
++export class RedeemService implements OnModuleInit {
+   constructor(
+     @InjectRepository(RedeemToken) private readonly tokenRepo: Repository<RedeemToken>,
+     @InjectRepository(VoucherItem) private readonly voucherItemRepo: Repository<VoucherItem>,
+@@ -26,145 +52,342 @@ export class RedeemService {
+     private readonly notifications: NotificationService,
+   ) {}
+ 
+-  // FR-REDEEM-02/03, BR-06: sinh token QR (chu ky HMAC) + ma OTP tuong ung, het han 60 giay, dung mot lan
++  // Production thieu REDEEM_HMAC_SECRET thi dung khoi dong, khong chay voi khoa mac dinh
++  onModuleInit() {
++    redeemSecret();
++  }
++
++  // ================= F10 - sinh ma redeem (FR-REDEEM-02/03, BR-06, BR-16) =================
++
++  // Token QR ky HMAC + OTP 6 so, hieu luc 60 giay; chi chu so huu, voucher ACTIVE va con han;
++  // sinh ma moi thi vo hieu ma cu; toi da 10 lan / 10 phut moi khach
+   async requestToken(userId: string, dto: RequestTokenDto) {
+     const item = await this.voucherItemRepo.findOne({ where: { id: dto.voucherItemId } });
+-    if (!item || item.userId !== userId) {
+-      throw new NotFoundException('Khong tim thay voucher.');
+-    }
+-    if (item.status !== VoucherItemStatus.ACTIVE) {
+-      throw new BadRequestException('Voucher khong con hieu luc de su dung.');
+-    }
++    if (!item || item.userId !== userId) throw new NotFoundException('Không tìm thấy voucher.');
+ 
+-    // BR-06: sinh token moi thi vo hieu cac token cu chua dung cua voucher
+-    await this.tokenRepo.update(
+-      { voucherItemId: item.id, usedAt: IsNull(), revokedAt: IsNull() },
+-      { revokedAt: new Date() },
+-    );
++    const now = new Date();
++    const block = usageBlock(item, now);
++    if (block) throw new BusinessException(block.reason, block.message, block.details);
++    await this.assertTokenRate(userId, now);
+ 
+-    const nonce = crypto.randomBytes(16).toString('hex');
+-    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+-    const ttlSeconds = parseInt(process.env.REDEEM_TOKEN_TTL_SECONDS || '60', 10);
+-    const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
++    const ttlSeconds = envInt('REDEEM_TOKEN_TTL_SECONDS', 60);
++    const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
++    const nonce = newNonce();
+ 
+-    const token = this.tokenRepo.create({
+-      voucherItemId: item.id,
+-      nonce,
+-      otpCode,
+-      expiresAt,
++    const token = await this.dataSource.transaction(async (manager) => {
++      // BR-06: moi voucher chi co mot ma con hieu luc
++      await manager.update(
++        RedeemToken,
++        { voucherItemId: item.id, usedAt: IsNull(), revokedAt: IsNull() },
++        { revokedAt: now },
++      );
++      const otpCode = await this.uniqueOtp(manager, now);
++      return manager.save(manager.create(RedeemToken, { voucherItemId: item.id, nonce, otpCode, expiresAt }));
+     });
+-    await this.tokenRepo.save(token);
+-
+-    // Chu ky HMAC dua tren secretKey rieng cua voucher - NFR-SEC-02
+-    const signature = crypto
+-      .createHmac('sha256', item.secretKey)
+-      .update(`${item.id}.${nonce}.${expiresAt.getTime()}`)
+-      .digest('hex');
+ 
+     return {
+-      qrPayload: `${item.id}.${nonce}.${expiresAt.getTime()}.${signature}`,
+-      otpCode,
++      qrPayload: buildQrPayload(nonce, expiresAt),
++      otpCode: token.otpCode,
+       expiresAt,
+       ttlSeconds,
+     };
+   }
+ 
+-  // FR-REDEEM-05/06/07/09/11, BR-06, BR-07, BR-12, NFR-REL-03
+-  async redeem(staffUserId: string, dto: RedeemDto) {
+-    if (!dto.nonce && !dto.otpCode) {
+-      throw new BadRequestException('Can cung cap ma QR hoac ma OTP.');
++  private async assertTokenRate(userId: string, now: Date) {
++    const windowMinutes = envInt('REDEEM_TOKEN_RATE_WINDOW_MINUTES', 10);
++    const max = envInt('REDEEM_TOKEN_MAX_PER_WINDOW', 10);
++    const since = new Date(now.getTime() - windowMinutes * MINUTE);
++    const recent = await this.tokenRepo
++      .createQueryBuilder('t')
++      .innerJoin('t.voucherItem', 'v')
++      .where('v.userId = :userId', { userId })
++      .andWhere('t.issuedAt > :since', { since })
++      .orderBy('t.issuedAt', 'ASC')
++      .getMany();
++    if (recent.length < max) return;
++    const retryAt = new Date(new Date(recent[recent.length - max].issuedAt).getTime() + windowMinutes * MINUTE);
++    throw new BusinessException(
++      'TOKEN_RATE_LIMITED',
++      `Bạn đã tạo mã ${max} lần trong ${windowMinutes} phút. Vui lòng thử lại lúc ${formatVnDateTime(retryAt)}.`,
++      { retryAt: retryAt.toISOString(), retryAfterSeconds: Math.max(1, Math.ceil((retryAt.getTime() - now.getTime()) / 1000)) },
++      HttpStatus.TOO_MANY_REQUESTS,
++    );
++  }
++
++  // OTP duy nhat trong cac token con hieu luc, de nhan vien nhap OTP xac dinh dung mot voucher
++  private async uniqueOtp(manager: EntityManager, now: Date): Promise<string> {
++    for (let attempt = 0; attempt < 20; attempt++) {
++      const otpCode = newOtp();
++      const taken = await manager.count(RedeemToken, {
++        where: { otpCode, usedAt: IsNull(), revokedAt: IsNull(), expiresAt: MoreThan(now) },
++      });
++      if (!taken) return otpCode;
+     }
++    throw new ServiceUnavailableException('Không sinh được mã OTP, vui lòng thử lại.');
++  }
++
++  // ================= F11 - xac nhan su dung (FR-REDEEM-05..13, BR-03, BR-06, BR-07, BR-12) =================
+ 
+-    // BR-07: nhan vien chi duoc redeem tai chi nhanh minh duoc gan
++  async redeem(staffUserId: string, dto: RedeemDto): Promise<RedeemResult> {
++    if (!!dto.qrPayload === !!dto.otpCode) {
++      throw new BusinessException('CODE_REQUIRED', 'Cần gửi đúng một trong hai: mã QR hoặc mã OTP.');
++    }
++    const now = new Date();
++
++    // BR-07: chi duoc xac nhan tai chi nhanh dang duoc gan va dang hoat dong
+     const assignment = await this.staffAssignmentRepo.findOne({
+       where: { userId: staffUserId, storeId: dto.storeId, active: true, store: { status: true } },
+     });
+     if (!assignment) {
+-      throw new BadRequestException('Nhan vien khong duoc gan cho chi nhanh nay.');
++      throw new BusinessException('STAFF_NOT_ASSIGNED', 'Bạn không được gán cho chi nhánh này.', null, HttpStatus.FORBIDDEN);
+     }
+ 
+-    const token = await this.tokenRepo.findOne({
+-      where: dto.nonce ? { nonce: dto.nonce } : { otpCode: dto.otpCode },
+-      order: { issuedAt: 'DESC' },
+-    });
+-    if (!token) {
+-      throw new BadRequestException('Ma khong hop le.');
+-    }
+-    if (token.revokedAt) {
+-      throw new BadRequestException('Ma da bi thay bang ma moi, vui long quet ma moi nhat.');
+-    }
+-    if (token.usedAt) {
+-      throw new BadRequestException('Ma da duoc su dung.');
++    let lookup: { nonce: string } | { otpCode: string };
++    if (dto.qrPayload) {
++      const qr = verifyQrPayload(dto.qrPayload);
++      if (!qr) throw new BusinessException('TOKEN_INVALID', 'Mã QR không hợp lệ hoặc không phải mã của hệ thống.');
++      if (qr.expiresAt.getTime() <= now.getTime()) {
++        throw new BusinessException('TOKEN_EXPIRED', 'Mã QR đã hết hạn, nhờ khách làm mới mã trên ứng dụng.');
++      }
++      lookup = { nonce: qr.nonce };
++    } else {
++      await this.assertOtpNotLocked(staffUserId, now);
++      lookup = { otpCode: dto.otpCode! };
+     }
+-    if (token.expiresAt < new Date()) {
+-      throw new BadRequestException('Ma da het han, vui long yeu cau ma moi.');
++
++    // Loi nghiep vu (tru BILL_REQUIRED) van commit de token bi danh dau da dung (FR-REDEEM-13) roi moi bao loi
++    const outcome = await this.dataSource.transaction((manager) => this.redeemTx(manager, staffUserId, dto, lookup, now));
++    if (!outcome.ok) {
++      if (outcome.otpFailed) await this.recordOtpFailure(staffUserId, dto.storeId);
++      throw outcome.error;
+     }
+ 
+-    const result = await this.dataSource.transaction(async (manager) => {
+-      // NFR-REL-03 / BR-12: khoa ban ghi voucher (pessimistic lock) de chong redeem trung khi truy cap dong thoi
+-      const item = await manager
+-        .createQueryBuilder(VoucherItem, 'v')
+-        .setLock('pessimistic_write')
+-        .where('v.id = :id', { id: token.voucherItemId })
+-        .getOne();
++    // FR-REDEEM-09 (F16): bao cho khach SAU khi commit, loi gui thong bao khong lam hong redeem
++    await this.notifyUsed(outcome.userId, outcome.result.voucherItemId, outcome.campaignId, dto.storeId);
++    return outcome.result;
++  }
+ 
+-      if (!item) throw new NotFoundException('Khong tim thay voucher.');
+-      if (item.status !== VoucherItemStatus.ACTIVE) {
+-        throw new BadRequestException(`Voucher khong hop le: trang thai hien tai la ${item.status}.`);
+-      }
+-      if (item.expireAt < new Date()) {
+-        throw new BadRequestException('Voucher da het han su dung.');
+-      }
++  private async redeemTx(
++    manager: EntityManager,
++    staffUserId: string,
++    dto: RedeemDto,
++    lookup: { nonce: string } | { otpCode: string },
++    now: Date,
++  ): Promise<RedeemOutcome> {
++    // 1) Khoa token (SELECT ... FOR UPDATE): hai quay cung quet mot ma thi chi mot ben di tiep
++    const qb = manager.createQueryBuilder(RedeemToken, 't').setLock('pessimistic_write');
++    if ('nonce' in lookup) {
++      qb.where('t.nonce = :nonce', { nonce: lookup.nonce });
++    } else {
++      qb.where('t.otpCode = :otpCode', { otpCode: lookup.otpCode })
++        .andWhere('t.usedAt IS NULL')
++        .andWhere('t.revokedAt IS NULL')
++        .andWhere('t.expiresAt > :now', { now });
++    }
++    let token = await qb.getOne();
+ 
+-      // BR-07: chi nhanh phai nam trong danh sach CampaignStore cua chien dich
+-      const allowed = await manager.findOne(CampaignStore, {
+-        where: { campaignId: item.campaignId, storeId: dto.storeId },
++    if (!token && 'otpCode' in lookup) {
++      // OTP khong khop ma nao con hieu luc: neu la ma cu cua khach thi bao ro, nguoc lai tinh la nhap sai
++      token = await manager.findOne(RedeemToken, {
++        where: { otpCode: lookup.otpCode, issuedAt: MoreThan(new Date(now.getTime() - 60 * MINUTE)) },
++        order: { issuedAt: 'DESC' },
+       });
+-      if (!allowed) {
+-        throw new BadRequestException('Voucher khong duoc ap dung tai chi nhanh nay.');
++      if (!token) {
++        return { ok: false, otpFailed: true, error: new BusinessException('OTP_INVALID', 'Mã OTP không đúng.') };
+       }
++    }
++    if (!token) {
++      return { ok: false, error: new BusinessException('TOKEN_INVALID', 'Mã QR không còn tồn tại trên hệ thống.') };
++    }
++    if (token.revokedAt) {
++      return {
++        ok: false,
++        error: new BusinessException('TOKEN_REVOKED', 'Mã đã được thay bằng mã mới, nhờ khách mở mã mới nhất trên ứng dụng.'),
++      };
++    }
+ 
+-      item.status = VoucherItemStatus.USED;
+-      item.usedAt = new Date();
+-      await manager.save(item);
++    // 2) Khoa voucher (NFR-REL-03, BR-12)
++    const item = await manager
++      .createQueryBuilder(VoucherItem, 'v')
++      .setLock('pessimistic_write')
++      .where('v.id = :id', { id: token.voucherItemId })
++      .getOne();
++    if (!item) return { ok: false, error: new BusinessException('TOKEN_INVALID', 'Không tìm thấy voucher của mã này.') };
+ 
+-      token.usedAt = new Date();
+-      await manager.save(token);
++    if (item.status === VoucherItemStatus.USED) {
++      return { ok: false, error: await this.alreadyUsedError(manager, item) };
++    }
++    if (token.usedAt) return { ok: false, error: new BusinessException('TOKEN_USED', 'Mã này đã được dùng.') };
++    if (token.expiresAt.getTime() <= now.getTime()) {
++      return { ok: false, error: new BusinessException('TOKEN_EXPIRED', 'Mã đã hết hạn, nhờ khách làm mới mã trên ứng dụng.') };
++    }
+ 
+-      const log = manager.create(RedemptionLog, {
++    // 3) Xet voucher: con hieu luc (BR-22, het han theo expireAt) va chi nhanh ap dung (BR-07)
++    const block = usageBlock(item, now);
++    let failure: BusinessException | null = block ? new BusinessException(block.reason, block.message, block.details) : null;
++    if (!failure) {
++      const allowed = await manager.find(CampaignStore, { where: { campaignId: item.campaignId }, relations: ['store'] });
++      if (!allowed.some((cs) => cs.storeId === dto.storeId)) {
++        const stores = allowed
++          .filter((cs) => cs.store?.status !== false)
++          .map((cs) => ({ id: cs.storeId, name: cs.store?.name ?? '', address: cs.store?.address ?? '' }));
++        failure = new BusinessException(
++          'WRONG_STORE',
++          `Voucher không áp dụng tại chi nhánh này. Áp dụng tại: ${stores.map((s) => s.name).join(', ') || 'không có chi nhánh nào'}.`,
++          { stores },
++        );
++      }
++    }
++    const campaign = await manager.findOneOrFail(VoucherCampaign, { where: { id: item.campaignId } });
++    if (!failure && billRequired(campaign.voucherType, dto.billAmount)) {
++      // Moi thu deu hop le, chi thieu hoa don: CHUA tieu token de nhan vien nhap hoa don roi gui lai ngay (BR-03)
++      return {
++        ok: false,
++        error: new BusinessException('BILL_REQUIRED', 'Voucher mệnh giá bắt buộc nhập giá trị hóa đơn (BR-03).', {
++          voucherType: campaign.voucherType,
++          faceValue: Number(campaign.faceValue),
++        }),
++      };
++    }
++
++    // 4) Danh dau token da dung (FR-REDEEM-13: ke ca khi voucher khong hop le, chong thu lai ma o quay khac).
++    // UPDATE co dieu kien: ngoai khoa ghi, hai request cung ma thi chi mot request cap nhat duoc
++    const col = (name: string) => manager.connection.driver.escape(name);
++    const consumed = await manager
++      .createQueryBuilder()
++      .update(RedeemToken)
++      .set({ usedAt: now })
++      .where(`${col('id')} = :id`, { id: token.id })
++      .andWhere(`${col('usedAt')} IS NULL`)
++      .execute();
++    if (!consumed.affected) return { ok: false, error: new BusinessException('TOKEN_USED', 'Mã này đã được dùng.') };
++    if (failure) return { ok: false, error: failure };
++
++    // 5) Thanh cong: ACTIVE -> USED (co dieu kien, BR-12) + RedemptionLog, vo hieu cac ma con lai cua voucher
++    const marked = await manager
++      .createQueryBuilder()
++      .update(VoucherItem)
++      .set({ status: VoucherItemStatus.USED, usedAt: now })
++      .where(`${col('id')} = :id`, { id: item.id })
++      .andWhere(`${col('status')} = :active`, { active: VoucherItemStatus.ACTIVE })
++      .execute();
++    if (!marked.affected) return { ok: false, error: await this.alreadyUsedError(manager, item) };
++    await manager.update(
++      RedeemToken,
++      { voucherItemId: item.id, usedAt: IsNull(), revokedAt: IsNull(), id: Not(token.id) },
++      { revokedAt: now },
++    );
++    const log = await manager.save(
++      manager.create(RedemptionLog, {
+         voucherItemId: item.id,
+         storeId: dto.storeId,
+         staffUserId,
+-        billAmount: dto.billAmount,
+-        method: dto.nonce ? RedeemMethod.QR : RedeemMethod.OTP,
+-      });
+-      await manager.save(log);
++        billAmount: dto.billAmount ?? null,
++        method: 'nonce' in lookup ? RedeemMethod.QR : RedeemMethod.OTP,
++      } as Partial<RedemptionLog>),
++    );
++    const redeemedAt = log.redeemedAt ?? now;
+ 
+-      return {
+-        message: 'Redeem thanh cong.',
++    return {
++      ok: true,
++      userId: item.userId,
++      campaignId: item.campaignId,
++      result: {
++        message: 'Xác nhận sử dụng thành công.',
++        redemptionLogId: log.id,
+         voucherItemId: item.id,
+-        redeemedAt: log.redeemedAt,
+-        userId: item.userId,
+-        campaignId: item.campaignId,
+-      };
++        voucherCode: item.code,
++        redeemedAt,
++        method: log.method,
++        billAmount: log.billAmount === null || log.billAmount === undefined ? null : Number(log.billAmount),
++        billEditableUntil: new Date(new Date(redeemedAt).getTime() + envInt('BILL_EDIT_WINDOW_MINUTES', 10) * MINUTE),
++        campaign: {
++          id: campaign.id,
++          title: campaign.title,
++          voucherType: campaign.voucherType,
++          faceValue: Number(campaign.faceValue),
++        },
++      },
++    };
++  }
++
++  // "Da dung luc ... tai ..." de nhan vien giai thich cho khach (FR-REDEEM-07)
++  private async alreadyUsedError(manager: EntityManager, item: VoucherItem) {
++    const log = await manager.findOne(RedemptionLog, { where: { voucherItemId: item.id }, relations: ['store'] });
++    const usedAt = log?.redeemedAt ?? item.usedAt;
++    const storeName = log?.store?.name ?? null;
++    const when = usedAt ? ` lúc ${formatVnDateTime(new Date(usedAt))}` : '';
++    const where = storeName ? ` tại ${storeName}` : '';
++    return new BusinessException('VOUCHER_USED', `Voucher đã được sử dụng${when}${where}.`, {
++      usedAt: usedAt ? new Date(usedAt).toISOString() : null,
++      storeId: log?.storeId ?? null,
++      storeName,
+     });
++  }
+ 
+-    // FR-REDEEM-09 (F16): bao cho khach SAU khi commit, loi gui thong bao khong lam hong redeem
+-    const { userId, campaignId, ...response } = result;
+-    await this.notifyUsed(userId, result.voucherItemId, campaignId, dto.storeId);
+-    return response;
++  // ================= F11 - khoa nhap OTP (FR-REDEEM-12): sai 5 lan / 5 phut -> khoa 15 phut =================
++
++  private async assertOtpNotLocked(staffUserId: string, now: Date) {
++    const lockMinutes = envInt('REDEEM_OTP_LOCK_MINUTES', 15);
++    const lock = await this.dataSource.getRepository(AuditLog).findOne({
++      where: { actorUserId: staffUserId, action: OTP_LOCKED, createdAt: MoreThan(new Date(now.getTime() - lockMinutes * MINUTE)) },
++      order: { createdAt: 'DESC' },
++    });
++    if (!lock) return;
++    const lockedUntil = new Date(new Date(lock.createdAt).getTime() + lockMinutes * MINUTE);
++    throw this.otpLockedError(lockedUntil);
+   }
+ 
+-  private async notifyUsed(userId: string, voucherItemId: string, campaignId: string, storeId: string) {
+-    try {
+-      const [campaign, store] = await Promise.all([
+-        this.dataSource.getRepository(VoucherCampaign).findOne({ where: { id: campaignId } }),
+-        this.dataSource.getRepository(Store).findOne({ where: { id: storeId } }),
+-      ]);
+-      await this.notifications.voucherUsed(userId, voucherItemId, campaign?.title ?? 'Voucher', store?.name);
+-    } catch {
+-      // thong bao la phu, khong tra loi cho nhan vien cua hang
++  private otpLockedError(lockedUntil: Date) {
++    return new BusinessException(
++      'OTP_LOCKED',
++      `Nhập sai OTP quá nhiều lần. Ô nhập OTP bị khóa đến ${formatVnDateTime(lockedUntil)}; vẫn có thể quét mã QR.`,
++      { lockedUntil: lockedUntil.toISOString() },
++      HttpStatus.TOO_MANY_REQUESTS,
++    );
++  }
++
++  // Ghi lan sai roi nem loi: du nguong thi khoa ngay o lan sai nay, chua du thi bao con bao nhieu lan thu
++  private async recordOtpFailure(staffUserId: string, storeId: string): Promise<never> {
++    const audit = this.dataSource.getRepository(AuditLog);
++    const maxFails = envInt('REDEEM_OTP_MAX_FAILS', 5);
++    const windowMinutes = envInt('REDEEM_OTP_FAIL_WINDOW_MINUTES', 5);
++    await audit.save(audit.create({ actorUserId: staffUserId, action: OTP_FAILED, entityType: 'Store', entityId: storeId }));
++    const now = new Date();
++    const fails = await audit.count({
++      where: { actorUserId: staffUserId, action: OTP_FAILED, createdAt: MoreThan(new Date(now.getTime() - windowMinutes * MINUTE)) },
++    });
++    if (fails >= maxFails) {
++      await audit.save(
++        audit.create({ actorUserId: staffUserId, action: OTP_LOCKED, entityType: 'Store', entityId: storeId, detail: { fails } }),
++      );
++      throw this.otpLockedError(new Date(now.getTime() + envInt('REDEEM_OTP_LOCK_MINUTES', 15) * MINUTE));
+     }
++    throw new BusinessException('OTP_INVALID', `Mã OTP không đúng. Còn ${maxFails - fails} lần thử trước khi bị khóa.`, {
++      remainingAttempts: maxFails - fails,
++    });
++  }
++
++  // ================= F11 - hoa don va lich su trong ca (FR-REDEEM-08, FR-REDEEM-10) =================
++
++  // Chi nguoi da xac nhan duoc sua, trong 10 phut ke tu luc xac nhan
++  async updateBill(staffUserId: string, logId: string, billAmount: number) {
++    const log = await this.logRepo.findOne({ where: { id: logId } });
++    if (!log || log.staffUserId !== staffUserId) throw new NotFoundException('Không tìm thấy lượt xác nhận.');
++    const windowMinutes = envInt('BILL_EDIT_WINDOW_MINUTES', 10);
++    const editableUntil = new Date(new Date(log.redeemedAt).getTime() + windowMinutes * MINUTE);
++    if (Date.now() > editableUntil.getTime()) {
++      throw new BusinessException(
++        'BILL_EDIT_EXPIRED',
++        `Chỉ sửa được giá trị hóa đơn trong ${windowMinutes} phút sau khi xác nhận.`,
++        { editableUntil: editableUntil.toISOString() },
++      );
++    }
++    log.billAmount = billAmount;
++    log.billUpdatedAt = new Date();
++    await this.logRepo.save(log);
++    const [updated] = await this.historyQuery().where('log.id = :id', { id: log.id }).getMany();
++    return this.toHistoryItem(updated);
+   }
+ 
+   // FR-AUTH-12: danh sach chi nhanh dang duoc gan (active) cho nhan vien
+@@ -176,15 +399,52 @@ export class RedeemService {
+     return assignments.map((a) => a.store);
+   }
+ 
+-  // FR-REDEEM-10
+-  findStaffHistoryToday(staffUserId: string) {
+-    const startOfDay = new Date();
+-    startOfDay.setHours(0, 0, 0, 0);
+-    return this.logRepo
+-      .createQueryBuilder('log')
++  // FR-REDEEM-10: cac lan xac nhan cua chinh nhan vien trong ngay (gio Viet Nam)
++  async findStaffHistoryToday(staffUserId: string) {
++    const logs = await this.historyQuery()
+       .where('log.staffUserId = :staffUserId', { staffUserId })
+-      .andWhere('log.redeemedAt >= :startOfDay', { startOfDay })
++      .andWhere('log.redeemedAt >= :startOfDay', { startOfDay: startOfVnDay() })
+       .orderBy('log.redeemedAt', 'DESC')
+       .getMany();
++    return logs.map((log) => this.toHistoryItem(log));
++  }
++
++  private historyQuery() {
++    return this.logRepo
++      .createQueryBuilder('log')
++      .leftJoinAndSelect('log.voucherItem', 'v')
++      .leftJoinAndSelect('v.campaign', 'c')
++      .leftJoinAndSelect('log.store', 's');
++  }
++
++  private toHistoryItem(log: RedemptionLog) {
++    const editableUntil = new Date(new Date(log.redeemedAt).getTime() + envInt('BILL_EDIT_WINDOW_MINUTES', 10) * MINUTE);
++    return {
++      id: log.id,
++      voucherItemId: log.voucherItemId,
++      voucherCode: log.voucherItem?.code ?? null,
++      campaignTitle: log.voucherItem?.campaign?.title ?? null,
++      voucherType: log.voucherItem?.campaign?.voucherType ?? null,
++      storeId: log.storeId,
++      storeName: log.store?.name ?? null,
++      method: log.method,
++      billAmount: log.billAmount === null || log.billAmount === undefined ? null : Number(log.billAmount),
++      billUpdatedAt: log.billUpdatedAt,
++      redeemedAt: log.redeemedAt,
++      billEditableUntil: editableUntil,
++      billEditable: Date.now() <= editableUntil.getTime(),
++    };
++  }
++
++  private async notifyUsed(userId: string, voucherItemId: string, campaignId: string, storeId: string) {
++    try {
++      const [campaign, store] = await Promise.all([
++        this.dataSource.getRepository(VoucherCampaign).findOne({ where: { id: campaignId } }),
++        this.dataSource.getRepository(Store).findOne({ where: { id: storeId } }),
++      ]);
++      await this.notifications.voucherUsed(userId, voucherItemId, campaign?.title ?? 'Voucher', store?.name);
++    } catch {
++      // thong bao la phu, khong tra loi cho nhan vien cua hang
++    }
+   }
+ }
+diff --git a/src/modules/refund/dto/create-refund.dto.ts b/src/modules/refund/dto/create-refund.dto.ts
+index 69c05d1..8c2945b 100644
+--- a/src/modules/refund/dto/create-refund.dto.ts
++++ b/src/modules/refund/dto/create-refund.dto.ts
+@@ -1,5 +1,5 @@
+ import { ApiProperty } from '@nestjs/swagger';
+-import { IsOptional, IsString, IsUUID } from 'class-validator';
++import { IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
+ 
+ // FR-REFUND-01
+ export class CreateRefundDto {
+@@ -10,5 +10,15 @@ export class CreateRefundDto {
+   @ApiProperty({ required: false })
+   @IsOptional()
+   @IsString()
++  @MaxLength(500)
+   reason?: string;
+ }
++
++// UC-07: quan tri vien khong hoan duoc tien, ghi ly do (bat buoc)
++export class FailManualRefundDto {
++  @ApiProperty()
++  @IsString()
++  @Matches(/\S/, { message: 'Vui lòng nhập lý do không hoàn được.' })
++  @MaxLength(500)
++  reason: string;
++}
+diff --git a/src/modules/refund/refund-gateway.ts b/src/modules/refund/refund-gateway.ts
+new file mode 100644
+index 0000000..bdfd961
+--- /dev/null
++++ b/src/modules/refund/refund-gateway.ts
+@@ -0,0 +1,39 @@
++import { Injectable } from '@nestjs/common';
++import { randomUUID } from 'crypto';
++
++export interface RefundGatewayRequest {
++  refundRequestId: string;
++  paymentId: string;
++  gateway: string;
++  gatewayTxnId: string;
++  // so tien hoan (hoan mot phan theo don gia voucher)
++  amount: number;
++}
++
++// SUCCESS: cong da hoan; DECLINED: cong tu choi (yeu cau FAILED, voucher duoc khoi phuc);
++// UNAVAILABLE: khong goi duoc cong -> chuyen MANUAL_PENDING cho quan tri vien hoan tay (FR-REFUND-06)
++export type RefundGatewayResult =
++  | { status: 'SUCCESS'; gatewayRefundId: string }
++  | { status: 'DECLINED'; message: string }
++  | { status: 'UNAVAILABLE'; message: string };
++
++// Cong hoan tien (FR-REFUND-05). Cong that chi can ke thua lop nay va dang ky lai provider trong RefundModule.
++export abstract class RefundGateway {
++  abstract refund(req: RefundGatewayRequest): Promise<RefundGatewayResult>;
++}
++
++// Cong thanh toan hien tai (payOS, F09) khong co API hoan tien, nen may chu dung cong gia lap sandbox:
++// REFUND_SANDBOX_RESULT = success (mac dinh) | declined | unavailable de demo du ca ba nhanh.
++@Injectable()
++export class SandboxRefundGateway extends RefundGateway {
++  async refund(_req: RefundGatewayRequest): Promise<RefundGatewayResult> {
++    switch ((process.env.REFUND_SANDBOX_RESULT || 'success').toLowerCase()) {
++      case 'declined':
++        return { status: 'DECLINED', message: 'Cổng thanh toán từ chối giao dịch hoàn tiền.' };
++      case 'unavailable':
++        return { status: 'UNAVAILABLE', message: 'Cổng thanh toán tạm thời không phản hồi.' };
++      default:
++        return { status: 'SUCCESS', gatewayRefundId: `SBX-RF-${randomUUID()}` };
++    }
++  }
++}
+diff --git a/src/modules/refund/refund.controller.ts b/src/modules/refund/refund.controller.ts
+index 8feedf7..ed5b78d 100644
+--- a/src/modules/refund/refund.controller.ts
++++ b/src/modules/refund/refund.controller.ts
+@@ -1,8 +1,8 @@
+-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
++import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
+ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+ import { ConfirmRefundDto } from '../report/dto/confirm-refund.dto';
+ import { RefundService } from './refund.service';
+-import { CreateRefundDto } from './dto/create-refund.dto';
++import { CreateRefundDto, FailManualRefundDto } from './dto/create-refund.dto';
+ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+ import { RolesGuard } from '../../common/guards/roles.guard';
+ import { Roles } from '../../common/decorators/roles.decorator';
+@@ -28,15 +28,32 @@ export class RefundController {
+     return this.refundService.findMyRequests(user.userId);
+   }
+ 
++  // UC-07: hang doi hoan thu cong (don lech so tien nam o GET /admin/payment-mismatches)
+   @Roles(Role.ADMIN)
+   @Get('manual-pending')
+   manualPending() {
+     return this.refundService.findManualPending();
+   }
+ 
++  // Da hoan tay: bat buoc nhap ma giao dich hoan
+   @Roles(Role.ADMIN)
+   @Patch(':id/confirm-manual')
+-  confirmManual(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload, @Body() dto: ConfirmRefundDto) {
++  confirmManual(
++    @Param('id', ParseUUIDPipe) id: string,
++    @CurrentUser() user: CurrentUserPayload,
++    @Body() dto: ConfirmRefundDto,
++  ) {
+     return this.refundService.confirmManualRefund(id, user.userId, dto.gatewayRefundId);
+   }
++
++  // Khong hoan duoc: yeu cau FAILED, voucher duoc khoi phuc cho khach
++  @Roles(Role.ADMIN)
++  @Patch(':id/fail-manual')
++  failManual(
++    @Param('id', ParseUUIDPipe) id: string,
++    @CurrentUser() user: CurrentUserPayload,
++    @Body() dto: FailManualRefundDto,
++  ) {
++    return this.refundService.failManualRefund(id, user.userId, dto.reason);
++  }
+ }
+diff --git a/src/modules/refund/refund.module.ts b/src/modules/refund/refund.module.ts
+index 0e88260..45a4abb 100644
+--- a/src/modules/refund/refund.module.ts
++++ b/src/modules/refund/refund.module.ts
+@@ -5,11 +5,13 @@ import { VoucherItem } from '../../entities/voucher-item.entity';
+ import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
+ import { RefundController } from './refund.controller';
+ import { RefundService } from './refund.service';
++import { RefundGateway, SandboxRefundGateway } from './refund-gateway';
+ 
+ @Module({
+   imports: [TypeOrmModule.forFeature([RefundRequest, VoucherItem, VoucherCampaign])],
+   controllers: [RefundController],
+-  providers: [RefundService],
++  // Doi sang cong hoan tien that: thay useClass bang lop ke thua RefundGateway
++  providers: [RefundService, { provide: RefundGateway, useClass: SandboxRefundGateway }],
+   exports: [RefundService],
+ })
+ export class RefundModule {}
+diff --git a/src/modules/refund/refund.rules.ts b/src/modules/refund/refund.rules.ts
+new file mode 100644
+index 0000000..f63db7e
+--- /dev/null
++++ b/src/modules/refund/refund.rules.ts
+@@ -0,0 +1,45 @@
++import { RefundRequestStatus, VoucherItemStatus } from '../../common/enums/status.enum';
++import { formatVnDateTime } from '../../common/utils/vn-time';
++
++// Yeu cau hoan dang xu ly: chua co ket qua cuoi cung
++export const OPEN_REFUND_STATUSES = [
++  RefundRequestStatus.REQUESTED,
++  RefundRequestStatus.PROCESSING,
++  RefundRequestStatus.MANUAL_PENDING,
++];
++
++export interface RefundEligibility {
++  canRefund: boolean;
++  reasonCode: string | null;
++  reason: string | null;
++  refundableUntil: Date;
++}
++
++// BR-05: chi voucher ACTIVE, con han, truoc refundableUntil va chua co yeu cau dang xu ly moi duoc hoan.
++// Dung chung cho API hoan tien va vi (app khoa nut "Hoàn tiền" kem ly do - FR-REFUND-04/07).
++export function refundEligibility(
++  item: { status: VoucherItemStatus; expireAt: Date; refundableUntil: Date },
++  hasOpenRequest: boolean,
++  now: Date,
++): RefundEligibility {
++  const refundableUntil = new Date(item.refundableUntil);
++  const deny = (reasonCode: string, reason: string): RefundEligibility => ({ canRefund: false, reasonCode, reason, refundableUntil });
++
++  if (item.status === VoucherItemStatus.USED) return deny('VOUCHER_USED', 'Voucher đã được sử dụng nên không thể hoàn tiền.');
++  if (item.status === VoucherItemStatus.REFUNDED) return deny('VOUCHER_REFUNDED', 'Voucher đã được hoàn tiền.');
++  if (item.status === VoucherItemStatus.REFUND_PENDING || hasOpenRequest) {
++    return deny('REFUND_IN_PROGRESS', 'Voucher đang có yêu cầu hoàn tiền được xử lý.');
++  }
++  if (item.status === VoucherItemStatus.EXPIRED || new Date(item.expireAt).getTime() <= now.getTime()) {
++    return deny('VOUCHER_EXPIRED', 'Voucher đã hết hạn sử dụng nên không thể hoàn tiền.');
++  }
++  if (now.getTime() > refundableUntil.getTime()) {
++    return deny('REFUND_WINDOW_PASSED', `Đã quá hạn hoàn tiền (hạn chót ${formatVnDateTime(refundableUntil)}).`);
++  }
++  return { canRefund: true, reasonCode: null, reason: null, refundableUntil };
++}
++
++// Hoan that bai / khong hoan duoc: tra voucher ve trang thai truoc do theo han su dung (SRS 6.2)
++export function statusAfterFailedRefund(expireAt: Date, now: Date): VoucherItemStatus {
++  return new Date(expireAt).getTime() > now.getTime() ? VoucherItemStatus.ACTIVE : VoucherItemStatus.EXPIRED;
++}
+diff --git a/src/modules/refund/refund.service.ts b/src/modules/refund/refund.service.ts
+index 78a60cf..bd5d68e 100644
+--- a/src/modules/refund/refund.service.ts
++++ b/src/modules/refund/refund.service.ts
+@@ -1,15 +1,15 @@
+ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+ import { InjectRepository } from '@nestjs/typeorm';
+-import { DataSource, Repository } from 'typeorm';
++import { DataSource, EntityManager, In, Repository } from 'typeorm';
+ import { RefundRequest } from '../../entities/refund-request.entity';
+ import { VoucherItem } from '../../entities/voucher-item.entity';
+ import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
+ import { AuditLog } from '../../entities/audit-log.entity';
+-import { CampaignStatus } from '../../common/enums/status.enum';
+ import { Order } from '../../entities/order.entity';
+ import { Payment } from '../../entities/payment.entity';
+ import { PaymentRefund } from '../../entities/payment-refund.entity';
+ import {
++  CampaignStatus,
+   PaymentRefundMode,
+   PaymentRefundReason,
+   PaymentRefundStatus,
+@@ -17,18 +17,31 @@ import {
+   RefundRequestStatus,
+   VoucherItemStatus,
+ } from '../../common/enums/status.enum';
++import { BusinessException } from '../../common/exceptions/business.exception';
+ import { CreateRefundDto } from './dto/create-refund.dto';
+ import { NotificationService } from '../notification/notification.service';
++import { RefundGateway, RefundGatewayResult } from './refund-gateway';
++import { OPEN_REFUND_STATUSES, refundEligibility, statusAfterFailedRefund } from './refund.rules';
++
++export const REFUND_STATUS_LABELS: Record<RefundRequestStatus, string> = {
++  [RefundRequestStatus.REQUESTED]: 'Đã gửi yêu cầu',
++  [RefundRequestStatus.PROCESSING]: 'Đang xử lý',
++  [RefundRequestStatus.MANUAL_PENDING]: 'Chờ quản trị viên hoàn tiền',
++  [RefundRequestStatus.COMPLETED]: 'Hoàn tiền thành công',
++  [RefundRequestStatus.REJECTED]: 'Không đủ điều kiện',
++  [RefundRequestStatus.FAILED]: 'Hoàn tiền không thành công',
++};
++
++const REFUND_RELATIONS = ['voucherItem', 'voucherItem.campaign', 'voucherItem.order', 'paymentRefund'];
+ 
+ @Injectable()
+ export class RefundService {
+   constructor(
+     @InjectRepository(RefundRequest) private readonly refundRepo: Repository<RefundRequest>,
+     @InjectRepository(VoucherItem) private readonly voucherItemRepo: Repository<VoucherItem>,
+-    @InjectRepository(VoucherCampaign)
+-    private readonly campaignRepo: Repository<VoucherCampaign>,
+     private readonly dataSource: DataSource,
+     private readonly notifications: NotificationService,
++    private readonly gateway: RefundGateway,
+   ) {}
+ 
+   // F16 (FR-REFUND-09): bao ket qua hoan tien cho khach; loi gui thong bao khong lam hong yeu cau hoan
+@@ -37,6 +50,7 @@ export class RefundService {
+       [RefundRequestStatus.COMPLETED]: 'Yêu cầu hoàn tiền của bạn đã hoàn tất, tiền sẽ về tài khoản thanh toán.',
+       [RefundRequestStatus.REJECTED]: `Yêu cầu hoàn tiền bị từ chối: ${refund.rejectReason ?? 'không đủ điều kiện'}.`,
+       [RefundRequestStatus.MANUAL_PENDING]: 'Yêu cầu hoàn tiền đang được quản trị viên xử lý thủ công.',
++      [RefundRequestStatus.FAILED]: `Hoàn tiền không thành công: ${refund.rejectReason ?? 'cổng thanh toán từ chối'}. Voucher đã được khôi phục.`,
+     };
+     const message = messages[refund.status];
+     if (!message) return;
+@@ -47,145 +61,318 @@ export class RefundService {
+     }
+   }
+ 
+-  // UC-03, FR-REFUND-01..06, BR-05: tu dong xet duyet theo quy tac, khong can nguoi phe duyet
++  // ================= UC-03, FR-REFUND-01..06, BR-05: khach yeu cau hoan, he thong tu xet theo quy tac =================
++
+   async requestRefund(userId: string, dto: CreateRefundDto) {
+     const item = await this.voucherItemRepo.findOne({ where: { id: dto.voucherItemId } });
+-    if (!item || item.userId !== userId) {
+-      throw new NotFoundException('Khong tim thay voucher.');
++    if (!item || item.userId !== userId) throw new NotFoundException('Không tìm thấy voucher.');
++
++    const hasOpen = (await this.refundRepo.count({ where: { voucherItemId: item.id, status: In(OPEN_REFUND_STATUSES) } })) > 0;
++    const eligibility = refundEligibility(item, hasOpen, new Date());
++    if (!eligibility.canRefund) {
++      // Khong du dieu kien: ghi yeu cau REJECTED kem ly do (SRS 6.4) de khach xem lai trong danh sach
++      const rejected = await this.refundRepo.save(
++        this.refundRepo.create({
++          voucherItemId: item.id,
++          userId,
++          reason: dto.reason,
++          status: RefundRequestStatus.REJECTED,
++          rejectReason: eligibility.reason ?? 'Không đủ điều kiện hoàn tiền.',
++          decidedAt: new Date(),
++        }),
++      );
++      await this.notifyResult(rejected);
++      return this.view(rejected.id);
+     }
+ 
+-    const refund = this.refundRepo.create({
+-      voucherItemId: item.id,
+-      userId,
+-      reason: dto.reason,
+-      status: RefundRequestStatus.REQUESTED,
++    // Du dieu kien: khoa voucher, xet lai trong transaction, voucher -> REFUND_PENDING (khong duoc redeem - BR-22)
++    const refund = await this.dataSource.transaction(async (manager) => {
++      const locked = await manager.findOneOrFail(VoucherItem, { where: { id: item.id }, lock: { mode: 'pessimistic_write' } });
++      const openNow = await manager.count(RefundRequest, {
++        where: { voucherItemId: item.id, status: In(OPEN_REFUND_STATUSES) },
++      });
++      const again = refundEligibility(locked, openNow > 0, new Date());
++      if (!again.canRefund) throw new BusinessException(again.reasonCode!, again.reason!);
++      locked.status = VoucherItemStatus.REFUND_PENDING;
++      await manager.save(locked);
++      return manager.save(
++        manager.create(RefundRequest, {
++          voucherItemId: item.id,
++          userId,
++          reason: dto.reason,
++          status: RefundRequestStatus.PROCESSING,
++        }),
++      );
+     });
+-    await this.refundRepo.save(refund);
+-
+-    const eligibility = this.checkEligibility(item);
+-    if (!eligibility.eligible) {
+-      refund.status = RefundRequestStatus.REJECTED;
+-      refund.rejectReason = eligibility.reason || 'Khong du dieu kien hoan tien.';
+-      refund.decidedAt = new Date();
+-      await this.refundRepo.save(refund);
+-      await this.notifyResult(refund);
+-      return refund;
++
++    // REFUND_MODE=manual: khong goi cong, quan tri vien hoan tay roi xac nhan (UC-07)
++    if ((process.env.REFUND_MODE || 'auto').toLowerCase() === 'manual') {
++      await this.toManualPending(refund.id);
++    } else {
++      await this.callGateway(refund.id);
++    }
++    const final = await this.refundRepo.findOneOrFail({ where: { id: refund.id } });
++    await this.notifyResult(final);
++    return this.view(refund.id);
++  }
++
++  // Goi cong ngoai transaction (khong giu khoa CSDL trong luc cho cong tra loi)
++  private async callGateway(refundId: string) {
++    const refund = await this.refundRepo.findOneOrFail({ where: { id: refundId }, relations: ['voucherItem'] });
++    const order = await this.dataSource.getRepository(Order).findOneOrFail({ where: { id: refund.voucherItem.orderId } });
++    const payment = await this.dataSource
++      .getRepository(Payment)
++      .findOne({ where: { orderId: order.id, status: PaymentStatus.SUCCESS } });
++    if (!payment) {
++      // Khong co giao dich goc de hoan tu dong -> quan tri vien xu ly
++      await this.toManualPending(refundId);
++      return;
++    }
++    const amount = Number(order.unitPrice);
++    // DC-12: kiem tra truoc khi goi cong, khong gui lenh hoan vuot so da thanh toan
++    if ((await this.completedRefundTotal(this.dataSource.manager, payment.id)) + amount > Number(payment.amount)) {
++      await this.failRefund(refundId, 'Tổng tiền hoàn vượt số tiền đã thanh toán (DC-12).', null);
++      return;
++    }
++
++    let result: RefundGatewayResult;
++    try {
++      result = await this.gateway.refund({
++        refundRequestId: refundId,
++        paymentId: payment.id,
++        gateway: payment.gateway,
++        gatewayTxnId: payment.gatewayTxnId,
++        amount,
++      });
++    } catch {
++      result = { status: 'UNAVAILABLE', message: 'Không kết nối được cổng thanh toán.' };
++    }
++
++    if (result.status === 'SUCCESS') {
++      await this.dataSource.transaction((manager) =>
++        this.completeRefund(manager, refundId, { mode: PaymentRefundMode.AUTO, gatewayRefundId: result.gatewayRefundId }),
++      );
++    } else if (result.status === 'DECLINED') {
++      await this.failRefund(refundId, result.message, { paymentId: payment.id, amount });
++    } else {
++      await this.toManualPending(refundId);
+     }
++  }
++
++  private async toManualPending(refundId: string) {
++    await this.refundRepo.update({ id: refundId }, { status: RefundRequestStatus.MANUAL_PENDING });
++  }
+ 
+-    const processed = await this.processRefund(refund, item);
+-    await this.notifyResult(processed);
+-    return processed;
++  private async completedRefundTotal(manager: EntityManager, paymentId: string) {
++    const previous = await manager.find(PaymentRefund, { where: { paymentId, status: PaymentRefundStatus.COMPLETED } });
++    return previous.reduce((sum, p) => sum + Number(p.amount), 0);
+   }
+ 
+-  // BR-05: chua su dung, trong 7 ngay ke tu ngay mua, con it nhat 3 ngay truoc han su dung
+-  private checkEligibility(item: VoucherItem): { eligible: boolean; reason?: string } {
+-    if (item.status !== VoucherItemStatus.ACTIVE) {
+-      return { eligible: false, reason: 'Voucher da duoc su dung hoac khong con hieu luc.' };
++  // Hoan thanh cong (tu dong hoac quan tri vien xac nhan): REFUNDED, ghi PaymentRefund, cong refundedAmount,
++  // tra lai ton kho neu chien dich chua ENDED va con thoi gian ban (SOLD_OUT -> PUBLISHED) - FR-REFUND-05, BR-13, DC-12
++  private async completeRefund(
++    manager: EntityManager,
++    refundId: string,
++    opts: { mode: PaymentRefundMode; gatewayRefundId: string; actorUserId?: string },
++  ) {
++    const refund = await manager.findOne(RefundRequest, { where: { id: refundId }, lock: { mode: 'pessimistic_write' } });
++    const expected = opts.mode === PaymentRefundMode.MANUAL ? RefundRequestStatus.MANUAL_PENDING : RefundRequestStatus.PROCESSING;
++    if (!refund || refund.status !== expected) {
++      throw new BadRequestException(
++        opts.mode === PaymentRefundMode.MANUAL ? 'Yêu cầu không còn chờ hoàn thủ công.' : 'Yêu cầu không còn ở trạng thái xử lý.',
++      );
+     }
+-    // BR-05: refundableUntil = min(ngay mua + 7 ngay, han su dung - 3 ngay), tinh luc phat hanh voucher
+-    if (Date.now() > item.refundableUntil.getTime()) {
+-      return { eligible: false, reason: 'Da qua thoi han duoc hoan tien cua voucher.' };
++    const item = await manager.findOneOrFail(VoucherItem, { where: { id: refund.voucherItemId }, lock: { mode: 'pessimistic_write' } });
++    if (item.status !== VoucherItemStatus.REFUND_PENDING) throw new BadRequestException('Voucher không ở trạng thái chờ hoàn.');
++    const order = await manager.findOneOrFail(Order, { where: { id: item.orderId }, lock: { mode: 'pessimistic_write' } });
++    const payment = await manager.findOneOrFail(Payment, {
++      where: { orderId: order.id, status: PaymentStatus.SUCCESS },
++      lock: { mode: 'pessimistic_write' },
++    });
++    const amount = Number(order.unitPrice);
++    if ((await this.completedRefundTotal(manager, payment.id)) + amount > Number(payment.amount)) {
++      throw new BadRequestException('Số tiền hoàn vượt giao dịch đã nhận.');
++    }
++
++    const now = new Date();
++    const paymentRefund = await manager.save(
++      PaymentRefund,
++      manager.create(PaymentRefund, {
++        paymentId: payment.id,
++        amount,
++        reasonType: PaymentRefundReason.CUSTOMER_REQUEST,
++        mode: opts.mode,
++        status: PaymentRefundStatus.COMPLETED,
++        gatewayRefundId: opts.gatewayRefundId.trim(),
++        processedBy: opts.actorUserId ?? null,
++        completedAt: now,
++      }),
++    );
++    item.status = VoucherItemStatus.REFUNDED;
++    order.refundedAmount = Number(order.refundedAmount) + amount;
++    refund.status = RefundRequestStatus.COMPLETED;
++    refund.decidedAt = now;
++    refund.paymentRefundId = paymentRefund.id;
++    await manager.save(item);
++    await manager.save(order);
++    await manager.save(refund);
++
++    const campaign = await manager.findOneOrFail(VoucherCampaign, { where: { id: item.campaignId }, lock: { mode: 'pessimistic_write' } });
++    if (campaign.status !== CampaignStatus.ENDED && new Date(campaign.saleEndAt) > now) {
++      campaign.soldQuantity = Math.max(0, campaign.soldQuantity - 1);
++      if (campaign.status === CampaignStatus.SOLD_OUT) campaign.status = CampaignStatus.PUBLISHED;
++      await manager.save(campaign);
+     }
+-    return { eligible: true };
++    return paymentRefund;
+   }
+ 
+-  // FR-REFUND-05/06, BR-13: voucher -> REFUNDED, tra lai ton kho, huy ban ghi hoa hong
+-  private async processRefund(refund: RefundRequest, item: VoucherItem) {
+-    return this.dataSource.transaction(async (manager) => {
+-      try {
+-        // TODO(BR-18/ASM-02): goi API hoan tien that su cua cong thanh toan sandbox.
+-        // Neu API khong kha dung, chuyen sang MANUAL_PENDING cho quan tri vien xac nhan thu cong (FR-REFUND-06).
+-        const gatewaySucceeded = true;
+-
+-        if (!gatewaySucceeded) {
+-          refund.status = RefundRequestStatus.MANUAL_PENDING;
+-          await manager.save(refund);
+-          return refund;
+-        }
+-
+-        // Ghi giao dich hoan tai cong theo don gia cua voucher (FR-REFUND-05, DC-12)
+-        const order = await manager.findOneOrFail(Order, { where: { id: item.orderId } });
+-        const payment = await manager.findOneOrFail(Payment, {
+-          where: { orderId: order.id, status: PaymentStatus.SUCCESS },
+-        });
+-        const paymentRefund = await manager.save(
++  // Cong tu choi / quan tri vien khong hoan duoc: yeu cau FAILED, voucher ve ACTIVE hoac EXPIRED (SRS 6.2, 6.4)
++  private async failRefund(
++    refundId: string,
++    reason: string,
++    gatewayAttempt: { paymentId: string; amount: number } | null,
++    actorUserId?: string,
++    fromStatus = RefundRequestStatus.PROCESSING,
++  ) {
++    await this.dataSource.transaction(async (manager) => {
++      const refund = await manager.findOne(RefundRequest, { where: { id: refundId }, lock: { mode: 'pessimistic_write' } });
++      if (!refund || refund.status !== fromStatus) {
++        throw new BadRequestException('Yêu cầu không còn ở trạng thái có thể đánh dấu không hoàn được.');
++      }
++      const item = await manager.findOneOrFail(VoucherItem, { where: { id: refund.voucherItemId }, lock: { mode: 'pessimistic_write' } });
++      const now = new Date();
++      if (gatewayAttempt) {
++        // Ghi lai lan goi cong that bai de doi soat
++        await manager.save(
++          PaymentRefund,
+           manager.create(PaymentRefund, {
+-            paymentId: payment.id,
+-            amount: Number(order.unitPrice),
++            paymentId: gatewayAttempt.paymentId,
++            amount: gatewayAttempt.amount,
+             reasonType: PaymentRefundReason.CUSTOMER_REQUEST,
+             mode: PaymentRefundMode.AUTO,
+-            status: PaymentRefundStatus.COMPLETED,
+-            gatewayRefundId: `RF-${Date.now()}`,
+-            completedAt: new Date(),
++            status: PaymentRefundStatus.FAILED,
++            completedAt: now,
+           }),
+         );
+-        order.refundedAmount = Number(order.refundedAmount) + Number(order.unitPrice);
+-        await manager.save(order);
+-
+-        item.status = VoucherItemStatus.REFUNDED;
++      }
++      if (item.status === VoucherItemStatus.REFUND_PENDING) {
++        item.status = statusAfterFailedRefund(item.expireAt, now);
+         await manager.save(item);
+-
+-        await manager.increment(VoucherCampaign, { id: item.campaignId }, 'soldQuantity', -1);
+-
+-        refund.status = RefundRequestStatus.COMPLETED;
+-        refund.decidedAt = new Date();
+-        refund.paymentRefundId = paymentRefund.id;
+-        await manager.save(refund);
+-
+-        // TODO: loai don hang khoi doanh thu doi soat (BR-13) khi module settlement tinh toan ky tiep theo
+-        return refund;
+-      } catch (e) {
+-        throw new BadRequestException('Khong the xu ly hoan tien luc nay.');
++      }
++      refund.status = RefundRequestStatus.FAILED;
++      refund.rejectReason = reason;
++      refund.decidedAt = now;
++      await manager.save(refund);
++      if (actorUserId) {
++        await manager.save(
++          AuditLog,
++          manager.create(AuditLog, {
++            actorUserId,
++            action: 'FAIL_MANUAL_REFUND',
++            entityType: 'RefundRequest',
++            entityId: refundId,
++            detail: { reason, voucherStatus: item.status },
++          }),
++        );
+       }
+     });
+   }
+ 
+-  // Quan tri vien xac nhan hoan tien thu cong khi cong thanh toan khong kha dung - FR-REFUND-06
++  // ================= UC-07: hang doi quan tri vien (FR-REFUND-06) =================
++
++  // Quan tri vien da hoan tay qua cong / ngan hang: nhap ma giao dich, ghi AuditLog
+   async confirmManualRefund(id: string, actorUserId: string, gatewayRefundId: string) {
+-    const result = await this.dataSource.transaction(async manager => {
+-      const refund = await manager.findOne(RefundRequest, { where: { id }, lock: { mode: 'pessimistic_write' } });
+-      if (!refund || refund.status !== RefundRequestStatus.MANUAL_PENDING) throw new BadRequestException('Yêu cầu không còn chờ hoàn thủ công.');
+-      const item = await manager.findOneOrFail(VoucherItem, { where: { id: refund.voucherItemId }, lock: { mode: 'pessimistic_write' } });
+-      if (item.status !== VoucherItemStatus.REFUND_PENDING) throw new BadRequestException('Voucher không ở trạng thái chờ hoàn.');
+-      const order = await manager.findOneOrFail(Order, { where: { id: item.orderId }, lock: { mode: 'pessimistic_write' } });
+-      const payment = await manager.findOneOrFail(Payment, { where: { orderId: order.id, status: PaymentStatus.SUCCESS }, lock: { mode: 'pessimistic_write' } });
+-      const previous = await manager.find(PaymentRefund, { where: { paymentId: payment.id, status: PaymentRefundStatus.COMPLETED } });
+-      const amount = Number(order.unitPrice);
+-      if (previous.reduce((sum, p) => sum + Number(p.amount), 0) + amount > Number(payment.amount)) throw new BadRequestException('Số tiền hoàn vượt giao dịch đã nhận.');
+-      const paymentRefund = await manager.save(PaymentRefund, manager.create(PaymentRefund, {
+-        paymentId: payment.id, amount, reasonType: PaymentRefundReason.CUSTOMER_REQUEST,
+-        mode: PaymentRefundMode.MANUAL, status: PaymentRefundStatus.COMPLETED,
+-        gatewayRefundId: gatewayRefundId.trim(), processedBy: actorUserId, completedAt: new Date(),
+-      }));
+-      item.status = VoucherItemStatus.REFUNDED;
+-      order.refundedAmount = Number(order.refundedAmount) + amount;
+-      refund.status = RefundRequestStatus.COMPLETED;
+-      refund.decidedAt = new Date();
+-      refund.paymentRefundId = paymentRefund.id;
+-      await manager.save(item); await manager.save(order); await manager.save(refund);
+-      const campaign = await manager.findOneOrFail(VoucherCampaign, { where: { id: item.campaignId }, lock: { mode: 'pessimistic_write' } });
+-      if (campaign.status !== CampaignStatus.ENDED && campaign.saleEndAt > new Date()) {
+-        campaign.soldQuantity = Math.max(0, campaign.soldQuantity - 1);
+-        if (campaign.status === CampaignStatus.SOLD_OUT) campaign.status = CampaignStatus.PUBLISHED;
+-        await manager.save(campaign);
+-      }
+-      await manager.save(AuditLog, manager.create(AuditLog, { actorUserId, action: 'CONFIRM_MANUAL_REFUND', entityType: 'RefundRequest', entityId: id, detail: { paymentRefundId: paymentRefund.id } }));
+-      return { message: 'Đã ghi nhận hoàn tiền thủ công.' };
++    await this.dataSource.transaction(async (manager) => {
++      const paymentRefund = await this.completeRefund(manager, id, {
++        mode: PaymentRefundMode.MANUAL,
++        gatewayRefundId,
++        actorUserId,
++      });
++      await manager.save(
++        AuditLog,
++        manager.create(AuditLog, {
++          actorUserId,
++          action: 'CONFIRM_MANUAL_REFUND',
++          entityType: 'RefundRequest',
++          entityId: id,
++          detail: { paymentRefundId: paymentRefund.id },
++        }),
++      );
+     });
+     const refund = await this.refundRepo.findOne({ where: { id } });
+     if (refund) await this.notifyResult(refund);
+-    return result;
++    return { message: 'Đã ghi nhận hoàn tiền thủ công.' };
+   }
+ 
+-  findMyRequests(userId: string) {
+-    return this.refundRepo.find({ where: { userId }, order: { createdAt: 'DESC' } });
++  // Quan tri vien khong hoan duoc (vd. tai khoan khach bi dong): yeu cau FAILED, voucher duoc khoi phuc
++  async failManualRefund(id: string, actorUserId: string, reason: string) {
++    await this.failRefund(id, reason.trim(), null, actorUserId, RefundRequestStatus.MANUAL_PENDING);
++    const refund = await this.refundRepo.findOne({ where: { id } });
++    if (refund) await this.notifyResult(refund);
++    return { message: 'Đã ghi nhận không hoàn được tiền, voucher đã được khôi phục cho khách.' };
++  }
++
++  // ================= Danh sach =================
++
++  // FR-REFUND-07: khach theo doi cac yeu cau hoan tien
++  async findMyRequests(userId: string) {
++    const list = await this.refundRepo.find({ where: { userId }, relations: REFUND_RELATIONS, order: { createdAt: 'DESC' } });
++    return list.map((r) => this.toView(r));
+   }
+ 
+-  // FR-REFUND-06: yeu cau dang cho quan tri vien xac nhan hoan tien thu cong
+-  findManualPending() {
+-    return this.refundRepo.find({
++  // FR-REFUND-06: yeu cau cho quan tri vien hoan thu cong, kem thong tin de doi chieu
++  async findManualPending() {
++    const list = await this.refundRepo.find({
+       where: { status: RefundRequestStatus.MANUAL_PENDING },
++      relations: [...REFUND_RELATIONS, 'user'],
+       order: { createdAt: 'ASC' },
+     });
++    const payments = await this.dataSource.getRepository(Payment).find({
++      where: { orderId: In(list.map((r) => r.voucherItem?.orderId).filter(Boolean)), status: PaymentStatus.SUCCESS },
++    });
++    return list.map((r) => {
++      const payment = payments.find((p) => p.orderId === r.voucherItem?.orderId);
++      return {
++        ...this.toView(r),
++        customer: r.user ? { id: r.user.id, email: r.user.email, fullName: r.user.fullName ?? null, phone: r.user.phone ?? null } : null,
++        payment: payment
++          ? { id: payment.id, gateway: payment.gateway, gatewayTxnId: payment.gatewayTxnId, amount: Number(payment.amount) }
++          : null,
++      };
++    });
++  }
++
++  private async view(id: string) {
++    return this.toView(await this.refundRepo.findOneOrFail({ where: { id }, relations: REFUND_RELATIONS }));
++  }
++
++  // Khong tra secretKey cua voucher hay du lieu noi bo; amount = don gia voucher se duoc hoan
++  private toView(r: RefundRequest) {
++    const item = r.voucherItem;
++    return {
++      id: r.id,
++      voucherItemId: r.voucherItemId,
++      userId: r.userId,
++      status: r.status,
++      statusLabel: REFUND_STATUS_LABELS[r.status],
++      reason: r.reason ?? null,
++      rejectReason: r.rejectReason ?? null,
++      createdAt: r.createdAt,
++      decidedAt: r.decidedAt ?? null,
++      amount: item?.order ? Number(item.order.unitPrice) : null,
++      voucherCode: item?.code ?? null,
++      voucherStatus: item?.status ?? null,
++      campaignId: item?.campaignId ?? null,
++      campaignTitle: item?.campaign?.title ?? null,
++      paymentRefund: r.paymentRefund
++        ? {
++            id: r.paymentRefund.id,
++            mode: r.paymentRefund.mode,
++            status: r.paymentRefund.status,
++            gatewayRefundId: r.paymentRefund.gatewayRefundId,
++            completedAt: r.paymentRefund.completedAt,
++          }
++        : null,
++    };
+   }
+ }
+diff --git a/src/modules/report/report.service.ts b/src/modules/report/report.service.ts
+index a3dc811..9a2b917 100644
+--- a/src/modules/report/report.service.ts
++++ b/src/modules/report/report.service.ts
+@@ -117,8 +117,15 @@ export class ReportService {
+   }
+ 
+   async paymentMismatches() {
+-    const orders = await this.orderRepo.find({ where: { status: OrderStatus.PAYMENT_MISMATCH }, order: { createdAt: 'ASC' } });
+-    return Promise.all(orders.map(async order => ({ ...order,
++    const orders = await this.orderRepo.find({
++      where: { status: OrderStatus.PAYMENT_MISMATCH },
++      relations: ['campaign', 'user'],
++      order: { createdAt: 'ASC' },
++    });
++    // UC-07: kem ten chien dich + khach de quan tri vien doi chieu; khong tra passwordHash / thong tin noi bo
++    return Promise.all(orders.map(async ({ user, campaign, ...order }) => ({ ...order,
++      campaignTitle: campaign?.title ?? null,
++      customer: user ? { id: user.id, email: user.email, fullName: user.fullName ?? null, phone: user.phone ?? null } : null,
+       payments: (await this.db.getRepository(Payment).find({ where: { orderId: order.id, status: PaymentStatus.SUCCESS } }))
+         .map(p => ({ id: p.id, gatewayTxnId: p.gatewayTxnId, amount: Number(p.amount) })),
+     })));
+diff --git a/src/modules/wallet/wallet.controller.ts b/src/modules/wallet/wallet.controller.ts
+new file mode 100644
+index 0000000..2d92db5
+--- /dev/null
++++ b/src/modules/wallet/wallet.controller.ts
+@@ -0,0 +1,38 @@
++import { Controller, Get, Param, ParseUUIDPipe, Query, UseGuards } from '@nestjs/common';
++import { ApiBearerAuth, ApiProperty, ApiTags } from '@nestjs/swagger';
++import { IsIn, IsOptional } from 'class-validator';
++import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
++import { RolesGuard } from '../../common/guards/roles.guard';
++import { Roles } from '../../common/decorators/roles.decorator';
++import { Role } from '../../common/enums/role.enum';
++import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
++import { WALLET_TABS, WalletTab } from './wallet.rules';
++import { WalletService } from './wallet.service';
++
++export class WalletQueryDto {
++  @ApiProperty({ required: false, enum: WALLET_TABS, description: 'Bo trong de lay ca vi' })
++  @IsOptional()
++  @IsIn(WALLET_TABS)
++  tab?: WalletTab;
++}
++
++@ApiTags('wallet')
++@ApiBearerAuth()
++@UseGuards(JwtAuthGuard, RolesGuard)
++@Roles(Role.CUSTOMER)
++@Controller('wallet')
++export class WalletController {
++  constructor(private readonly walletService: WalletService) {}
++
++  // FR-REDEEM-01: vi voucher theo tab ACTIVE (gom REFUND_PENDING) / USED / EXPIRED / REFUNDED
++  @Get()
++  list(@CurrentUser() user: CurrentUserPayload, @Query() query: WalletQueryDto) {
++    return this.walletService.list(user.userId, query.tab);
++  }
++
++  // Chi tiet voucher da mua: chi nhanh ap dung, lan su dung, yeu cau hoan, dieu kien hoan / danh gia
++  @Get(':id')
++  detail(@CurrentUser() user: CurrentUserPayload, @Param('id', ParseUUIDPipe) id: string) {
++    return this.walletService.detail(user.userId, id);
++  }
++}
+diff --git a/src/modules/wallet/wallet.module.ts b/src/modules/wallet/wallet.module.ts
+new file mode 100644
+index 0000000..7dc9a89
+--- /dev/null
++++ b/src/modules/wallet/wallet.module.ts
+@@ -0,0 +1,17 @@
++import { Module } from '@nestjs/common';
++import { TypeOrmModule } from '@nestjs/typeorm';
++import { VoucherItem } from '../../entities/voucher-item.entity';
++import { CampaignStore } from '../../entities/campaign-store.entity';
++import { RedemptionLog } from '../../entities/redemption-log.entity';
++import { RefundRequest } from '../../entities/refund-request.entity';
++import { Review } from '../../entities/review.entity';
++import { WalletController } from './wallet.controller';
++import { WalletService } from './wallet.service';
++
++// F10: vi voucher cua khach hang
++@Module({
++  imports: [TypeOrmModule.forFeature([VoucherItem, CampaignStore, RedemptionLog, RefundRequest, Review])],
++  controllers: [WalletController],
++  providers: [WalletService],
++})
++export class WalletModule {}
+diff --git a/src/modules/wallet/wallet.rules.spec.ts b/src/modules/wallet/wallet.rules.spec.ts
+new file mode 100644
+index 0000000..8f3ccd4
+--- /dev/null
++++ b/src/modules/wallet/wallet.rules.spec.ts
+@@ -0,0 +1,80 @@
++import { VoucherItemStatus } from '../../common/enums/status.enum';
++import { refundEligibility, statusAfterFailedRefund } from '../refund/refund.rules';
++import { walletPlacement } from './wallet.rules';
++
++const NOW = new Date('2026-10-21T07:00:00Z');
++const DAY = 24 * 60 * 60 * 1000;
++const future = (days: number) => new Date(NOW.getTime() + days * DAY);
++
++describe('walletPlacement: 4 tab cua vi (FR-REDEEM-01)', () => {
++  it('ACTIVE con han -> tab dang hieu luc', () => {
++    expect(walletPlacement({ status: VoucherItemStatus.ACTIVE, expireAt: future(5) }, NOW)).toEqual({
++      tab: 'ACTIVE',
++      displayStatus: VoucherItemStatus.ACTIVE,
++      statusLabel: 'Đang hiệu lực',
++    });
++  });
++
++  it('REFUND_PENDING nam o tab dang hieu luc voi nhan "Đang hoàn tiền", ke ca da qua han', () => {
++    for (const expireAt of [future(5), future(-1)]) {
++      expect(walletPlacement({ status: VoucherItemStatus.REFUND_PENDING, expireAt }, NOW)).toEqual({
++        tab: 'ACTIVE',
++        displayStatus: VoucherItemStatus.REFUND_PENDING,
++        statusLabel: 'Đang hoàn tiền',
++      });
++    }
++  });
++
++  it('ACTIVE qua expireAt -> tab het han ngay, khong cho job', () => {
++    expect(walletPlacement({ status: VoucherItemStatus.ACTIVE, expireAt: future(-0.001) }, NOW)).toMatchObject({
++      tab: 'EXPIRED',
++      displayStatus: VoucherItemStatus.EXPIRED,
++    });
++  });
++
++  it.each([
++    [VoucherItemStatus.USED, 'USED'],
++    [VoucherItemStatus.EXPIRED, 'EXPIRED'],
++    [VoucherItemStatus.REFUNDED, 'REFUNDED'],
++  ])('%s -> tab %s', (status, tab) => {
++    expect(walletPlacement({ status, expireAt: future(5) }, NOW).tab).toBe(tab);
++  });
++});
++
++describe('refundEligibility (BR-05)', () => {
++  const active = { status: VoucherItemStatus.ACTIVE, expireAt: future(30), refundableUntil: future(3) };
++
++  it('du dieu kien', () => {
++    expect(refundEligibility(active, false, NOW)).toMatchObject({ canRefund: true, reason: null });
++  });
++
++  it('qua refundableUntil -> bao kem han chot', () => {
++    const r = refundEligibility({ ...active, refundableUntil: future(-1) }, false, NOW);
++    expect(r).toMatchObject({ canRefund: false, reasonCode: 'REFUND_WINDOW_PASSED' });
++    expect(r.reason).toContain('hạn chót');
++  });
++
++  it('dang co yeu cau xu ly -> khong cho gui them', () => {
++    expect(refundEligibility(active, true, NOW).reasonCode).toBe('REFUND_IN_PROGRESS');
++    expect(refundEligibility({ ...active, status: VoucherItemStatus.REFUND_PENDING }, false, NOW).reasonCode).toBe(
++      'REFUND_IN_PROGRESS',
++    );
++  });
++
++  it.each([
++    [VoucherItemStatus.USED, 'VOUCHER_USED'],
++    [VoucherItemStatus.REFUNDED, 'VOUCHER_REFUNDED'],
++    [VoucherItemStatus.EXPIRED, 'VOUCHER_EXPIRED'],
++  ])('%s -> %s', (status, code) => {
++    expect(refundEligibility({ ...active, status }, false, NOW).reasonCode).toBe(code);
++  });
++
++  it('ACTIVE nhung qua expireAt -> het han', () => {
++    expect(refundEligibility({ ...active, expireAt: future(-1) }, false, NOW).reasonCode).toBe('VOUCHER_EXPIRED');
++  });
++
++  it('hoan that bai: voucher ve ACTIVE neu con han, EXPIRED neu het han', () => {
++    expect(statusAfterFailedRefund(future(1), NOW)).toBe(VoucherItemStatus.ACTIVE);
++    expect(statusAfterFailedRefund(future(-1), NOW)).toBe(VoucherItemStatus.EXPIRED);
++  });
++});
+diff --git a/src/modules/wallet/wallet.rules.ts b/src/modules/wallet/wallet.rules.ts
+new file mode 100644
+index 0000000..bd5692f
+--- /dev/null
++++ b/src/modules/wallet/wallet.rules.ts
+@@ -0,0 +1,48 @@
++import { VoucherItemStatus } from '../../common/enums/status.enum';
++
++// 4 tab cua vi (FR-REDEEM-01)
++export const WALLET_TABS = ['ACTIVE', 'USED', 'EXPIRED', 'REFUNDED'] as const;
++export type WalletTab = (typeof WALLET_TABS)[number];
++
++export const WALLET_STATUS_LABELS: Record<VoucherItemStatus, string> = {
++  [VoucherItemStatus.ACTIVE]: 'Đang hiệu lực',
++  [VoucherItemStatus.REFUND_PENDING]: 'Đang hoàn tiền',
++  [VoucherItemStatus.USED]: 'Đã sử dụng',
++  [VoucherItemStatus.EXPIRED]: 'Hết hạn',
++  [VoucherItemStatus.REFUNDED]: 'Đã hoàn tiền',
++};
++
++export interface WalletPlacement {
++  tab: WalletTab;
++  // trang thai hien thi: ACTIVE qua expireAt hien la EXPIRED ngay, khong cho job cap nhat
++  displayStatus: VoucherItemStatus;
++  statusLabel: string;
++}
++
++// REFUND_PENDING nam o tab "dang hieu luc" voi nhan "Đang hoàn tiền" (ke ca khi da qua han, vi dang cho hoan)
++export function walletPlacement(item: { status: VoucherItemStatus; expireAt: Date }, now: Date): WalletPlacement {
++  let tab: WalletTab;
++  let displayStatus = item.status;
++  switch (item.status) {
++    case VoucherItemStatus.REFUND_PENDING:
++      tab = 'ACTIVE';
++      break;
++    case VoucherItemStatus.ACTIVE:
++      if (new Date(item.expireAt).getTime() > now.getTime()) {
++        tab = 'ACTIVE';
++      } else {
++        tab = 'EXPIRED';
++        displayStatus = VoucherItemStatus.EXPIRED;
++      }
++      break;
++    case VoucherItemStatus.USED:
++      tab = 'USED';
++      break;
++    case VoucherItemStatus.REFUNDED:
++      tab = 'REFUNDED';
++      break;
++    default:
++      tab = 'EXPIRED';
++  }
++  return { tab, displayStatus, statusLabel: WALLET_STATUS_LABELS[displayStatus] };
++}
+diff --git a/src/modules/wallet/wallet.service.ts b/src/modules/wallet/wallet.service.ts
+new file mode 100644
+index 0000000..661fa1a
+--- /dev/null
++++ b/src/modules/wallet/wallet.service.ts
+@@ -0,0 +1,121 @@
++import { Injectable, NotFoundException } from '@nestjs/common';
++import { InjectRepository } from '@nestjs/typeorm';
++import { In, Repository } from 'typeorm';
++import { VoucherItem } from '../../entities/voucher-item.entity';
++import { CampaignStore } from '../../entities/campaign-store.entity';
++import { RedemptionLog } from '../../entities/redemption-log.entity';
++import { RefundRequest } from '../../entities/refund-request.entity';
++import { Review } from '../../entities/review.entity';
++import { VoucherItemStatus } from '../../common/enums/status.enum';
++import { OPEN_REFUND_STATUSES, refundEligibility } from '../refund/refund.rules';
++import { WalletTab, walletPlacement } from './wallet.rules';
++
++// F10 - vi voucher cua khach (FR-REDEEM-01): chia 4 tab, chi tiet voucher da mua, chi chu so huu xem duoc.
++// Tra kem dieu kien hoan tien (FR-REFUND-04/07) va danh gia (BR-10) de app khoa / hien nut dung luc.
++@Injectable()
++export class WalletService {
++  constructor(
++    @InjectRepository(VoucherItem) private readonly voucherItemRepo: Repository<VoucherItem>,
++    @InjectRepository(CampaignStore) private readonly campaignStoreRepo: Repository<CampaignStore>,
++    @InjectRepository(RedemptionLog) private readonly logRepo: Repository<RedemptionLog>,
++    @InjectRepository(RefundRequest) private readonly refundRepo: Repository<RefundRequest>,
++    @InjectRepository(Review) private readonly reviewRepo: Repository<Review>,
++  ) {}
++
++  async list(userId: string, tab?: WalletTab) {
++    const items = await this.voucherItemRepo.find({
++      where: { userId },
++      relations: ['campaign', 'campaign.brand'],
++      order: { issuedAt: 'DESC' },
++    });
++    const [openRefunds, reviews] = await Promise.all([
++      this.refundRepo.find({ where: { userId, status: In(OPEN_REFUND_STATUSES) }, select: ['id', 'voucherItemId'] }),
++      this.reviewRepo.find({ where: { userId }, select: ['id', 'campaignId'] }),
++    ]);
++    const open = new Set(openRefunds.map((r) => r.voucherItemId));
++    const reviewed = new Set(reviews.map((r) => r.campaignId));
++    const now = new Date();
++    const views = items.map((item) => this.toView(item, now, open.has(item.id), reviewed.has(item.campaignId)));
++    return tab ? views.filter((v) => v.tab === tab) : views;
++  }
++
++  async detail(userId: string, id: string) {
++    const item = await this.voucherItemRepo.findOne({ where: { id }, relations: ['campaign', 'campaign.brand'] });
++    // Voucher cua nguoi khac tra 404 nhu khong ton tai, khong lo su ton tai cua voucher
++    if (!item || item.userId !== userId) throw new NotFoundException('Không tìm thấy voucher.');
++
++    const [campaignStores, redemption, refunds, review] = await Promise.all([
++      this.campaignStoreRepo.find({ where: { campaignId: item.campaignId }, relations: ['store'] }),
++      this.logRepo.findOne({ where: { voucherItemId: item.id }, relations: ['store'] }),
++      this.refundRepo.find({ where: { voucherItemId: item.id }, relations: ['paymentRefund'], order: { createdAt: 'DESC' } }),
++      this.reviewRepo.findOne({ where: { userId, campaignId: item.campaignId } }),
++    ]);
++    const hasOpenRefund = refunds.some((r) => OPEN_REFUND_STATUSES.includes(r.status));
++
++    return {
++      ...this.toView(item, new Date(), hasOpenRefund, !!review),
++      stores: campaignStores
++        .filter((cs) => cs.store && cs.store.status !== false)
++        .map((cs) => ({
++          id: cs.store.id,
++          name: cs.store.name,
++          address: cs.store.address,
++          latitude: cs.store.latitude,
++          longitude: cs.store.longitude,
++          phone: cs.store.phone ?? null,
++          openingHours: cs.store.openingHours ?? null,
++        })),
++      redemption: redemption
++        ? {
++            redeemedAt: redemption.redeemedAt,
++            storeId: redemption.storeId,
++            storeName: redemption.store?.name ?? null,
++            storeAddress: redemption.store?.address ?? null,
++            method: redemption.method,
++            billAmount: redemption.billAmount === null || redemption.billAmount === undefined ? null : Number(redemption.billAmount),
++          }
++        : null,
++      refundRequests: refunds.map((r) => ({
++        id: r.id,
++        status: r.status,
++        reason: r.reason ?? null,
++        rejectReason: r.rejectReason ?? null,
++        createdAt: r.createdAt,
++        decidedAt: r.decidedAt ?? null,
++        gatewayRefundId: r.paymentRefund?.gatewayRefundId ?? null,
++      })),
++      reviewId: review?.id ?? null,
++    };
++  }
++
++  private toView(item: VoucherItem, now: Date, hasOpenRefund: boolean, hasReviewed: boolean) {
++    const { secretKey: _secretKey, campaign, ...rest } = item;
++    const placement = walletPlacement(item, now);
++    const refund = refundEligibility(item, hasOpenRefund, now);
++    const brand = campaign?.brand;
++    return {
++      ...rest,
++      ...placement,
++      // Chi voucher dang hieu luc (khong dang cho hoan) moi sinh ma su dung duoc
++      canRedeem: placement.tab === 'ACTIVE' && placement.displayStatus === VoucherItemStatus.ACTIVE,
++      refund,
++      review: {
++        hasReviewed,
++        // BR-10: da dung it nhat 1 voucher cua chien dich va chua danh gia chien dich nay
++        canReview: item.status === VoucherItemStatus.USED && !hasReviewed,
++      },
++      campaign: campaign
++        ? {
++            ...this.withoutBrand(campaign),
++            brand: brand ? { id: brand.id, name: brand.name, logo: brand.logo ?? null } : null,
++          }
++        : null,
++    };
++  }
++
++  // Bo thong tin noi bo cua thuong hieu (tai khoan ngan hang, lien he) khoi vi khach
++  private withoutBrand(campaign: VoucherItem['campaign']) {
++    const { brand: _brand, ...rest } = campaign;
++    return rest;
++  }
++}
+diff --git a/test/notification.e2e-spec.ts b/test/notification.e2e-spec.ts
+index 19a7a5b..6949916 100644
+--- a/test/notification.e2e-spec.ts
++++ b/test/notification.e2e-spec.ts
+@@ -93,7 +93,8 @@ describe('F16 - thong bao (e2e)', () => {
+     await t.http
+       .post('/api/redeem')
+       .set(auth('staff'))
+-      .send({ storeId: ID.store1, otpCode: token.body.data.otpCode })
++      // BR-03: voucher menh gia (PREPAID) bat buoc nhap gia tri hoa don
++      .send({ storeId: ID.store1, otpCode: token.body.data.otpCode, billAmount: 120000 })
+       .expect(201);
+ 
+     const used = (await myNotifications('lan')).data.items.find((n: { type: string }) => n.type === 'VOUCHER_USED');
+diff --git a/test/voucher-usage.e2e-spec.ts b/test/voucher-usage.e2e-spec.ts
+new file mode 100644
+index 0000000..be26576
+--- /dev/null
++++ b/test/voucher-usage.e2e-spec.ts
+@@ -0,0 +1,595 @@
++// F10 - F12 - F15: vi voucher, ma redeem, xac nhan su dung, hoan tien, danh gia (e2e tren pg-mem)
++//   npm run test:e2e
++import * as crypto from 'crypto';
++import { DataSource } from 'typeorm';
++import { ID, TestApp, createTestApp } from './helpers/test-app';
++import { signWebhook } from '../src/modules/order/payment-gateway';
++import { User } from '../src/entities/user.entity';
++import { VoucherCampaign } from '../src/entities/voucher-campaign.entity';
++import { CampaignStore } from '../src/entities/campaign-store.entity';
++import { VoucherItem } from '../src/entities/voucher-item.entity';
++import { RedeemToken } from '../src/entities/redeem-token.entity';
++import { RedemptionLog } from '../src/entities/redemption-log.entity';
++import { StaffAssignment } from '../src/entities/staff-assignment.entity';
++import { AuditLog } from '../src/entities/audit-log.entity';
++import { RefundRequest } from '../src/entities/refund-request.entity';
++import { PaymentRefund } from '../src/entities/payment-refund.entity';
++import { Review } from '../src/entities/review.entity';
++import { Role } from '../src/common/enums/role.enum';
++import {
++  CampaignStatus,
++  PaymentRefundStatus,
++  RefundRequestStatus,
++  ReviewStatus,
++  VoucherItemStatus,
++  VoucherType,
++} from '../src/common/enums/status.enum';
++
++const DAY = 24 * 60 * 60 * 1000;
++const MINUTE = 60 * 1000;
++
++describe('F10/F11/F12/F15 - su dung voucher (e2e)', () => {
++  let t: TestApp;
++  let ds: DataSource;
++  const tokens: Record<string, string> = {};
++  const users: Record<string, User> = {};
++  let store2: string;
++  const auth = (who: string) => ({ Authorization: `Bearer ${tokens[who]}` });
++
++  async function newCustomer(name: string) {
++    users[name] = await ds.getRepository(User).save({ email: `${name}@usage.local`, fullName: `Nguyễn Văn ${name}`, role: Role.CUSTOMER });
++    tokens[name] = await t.customerToken(users[name].id, users[name].email);
++  }
++
++  async function newCampaign(title: string, voucherType = VoucherType.PREPAID, totalQuantity = 10) {
++    const now = Date.now();
++    const c = await ds.getRepository(VoucherCampaign).save({
++      brandId: ID.brand,
++      title,
++      voucherType,
++      salePrice: 50000,
++      faceValue: 100000,
++      discountType: voucherType === VoucherType.DISCOUNT ? 'AMOUNT' : null,
++      discountValue: voucherType === VoucherType.DISCOUNT ? 20000 : null,
++      totalQuantity,
++      soldQuantity: 0,
++      reservedQuantity: 0,
++      limitPerUser: 10,
++      saleStartAt: new Date(now - DAY),
++      saleEndAt: new Date(now + 30 * DAY),
++      voucherExpireAt: new Date(now + 90 * DAY),
++      status: CampaignStatus.PUBLISHED,
++    } as Partial<VoucherCampaign>);
++    await ds.getRepository(CampaignStore).save({ campaignId: c.id, storeId: ID.store1 });
++    return c;
++  }
++
++  // Mua va thanh toan qua webhook co chu ky; tra ve cac voucher vua phat hanh
++  async function buy(who: string, campaignId: string, quantity = 1) {
++    const res = await t.http.post('/api/orders').set(auth(who)).send({ campaignId, quantity }).expect(201);
++    const order = res.body.data.order;
++    const p = { orderId: order.id, gatewayTxnId: `T-${crypto.randomUUID()}`, amount: Number(order.totalAmount), status: 'SUCCESS' };
++    await t.http.post('/api/orders/payment-webhook').send({ ...p, signature: signWebhook(p) }).expect(200);
++    return ds.getRepository(VoucherItem).find({ where: { orderId: order.id } });
++  }
++
++  const token = async (who: string, voucherItemId: string) =>
++    (await t.http.post('/api/redeem/token').set(auth(who)).send({ voucherItemId }).expect(201)).body.data;
++
++  const redeem = (body: Record<string, unknown>, who = 'staff') =>
++    t.http.post('/api/redeem').set(auth(who)).send({ storeId: ID.store1, ...body });
++
++  const selectStore = (storeId: string) =>
++    t.http.post('/api/auth/select-store').set(auth('staff')).send({ storeId }).expect(201);
++
++  beforeAll(async () => {
++    process.env.PAYMENT_WEBHOOK_SECRET = 'e2e-webhook-secret';
++    t = await createTestApp();
++    ds = t.dataSource;
++    tokens.staff = await t.login('staff@highlands.local');
++    tokens.owner = await t.login('owner@highlands.local');
++    tokens.otherOwner = await t.login('owner@phuclong.local');
++    tokens.admin = await t.login('admin@voucher.local');
++    const staff = await ds.getRepository(User).findOneByOrFail({ email: 'staff@highlands.local' });
++    const assignments = await ds.getRepository(StaffAssignment).find({ where: { userId: staff.id, active: true } });
++    store2 = assignments.map((a) => a.storeId).find((s) => s !== ID.store1)!;
++    await selectStore(ID.store1);
++  }, 60000);
++
++  afterAll(async () => {
++    await t?.app.close();
++  });
++
++  afterEach(() => {
++    delete process.env.REFUND_MODE;
++    delete process.env.REFUND_SANDBOX_RESULT;
++  });
++
++  // ================= F10 - vi =================
++
++  describe('vi voucher (task 7)', () => {
++    let items: VoucherItem[];
++
++    beforeAll(async () => {
++      await newCustomer('vi');
++      await newCustomer('khac');
++      const c = await newCampaign('Vi 4 tab');
++      items = await buy('vi', c.id, 5);
++      const repo = ds.getRepository(VoucherItem);
++      await repo.update(items[1].id, { status: VoucherItemStatus.REFUND_PENDING });
++      await repo.update(items[2].id, { expireAt: new Date(Date.now() - MINUTE) });
++      await repo.update(items[3].id, { status: VoucherItemStatus.USED, usedAt: new Date() });
++      await repo.update(items[4].id, { status: VoucherItemStatus.REFUNDED });
++    });
++
++    it('chia 4 tab; REFUND_PENDING o tab dang hieu luc voi nhan "Đang hoàn tiền"; het han xet theo expireAt', async () => {
++      const active = (await t.http.get('/api/wallet?tab=ACTIVE').set(auth('vi')).expect(200)).body.data;
++      expect(active.map((v: { id: string }) => v.id).sort()).toEqual([items[0].id, items[1].id].sort());
++      const pending = active.find((v: { id: string }) => v.id === items[1].id);
++      expect(pending).toMatchObject({ tab: 'ACTIVE', displayStatus: 'REFUND_PENDING', statusLabel: 'Đang hoàn tiền', canRedeem: false });
++      expect(active.find((v: { id: string }) => v.id === items[0].id)).toMatchObject({ canRedeem: true, refund: { canRefund: true } });
++
++      const expired = (await t.http.get('/api/wallet?tab=EXPIRED').set(auth('vi')).expect(200)).body.data;
++      expect(expired).toHaveLength(1);
++      expect(expired[0]).toMatchObject({ id: items[2].id, status: 'ACTIVE', displayStatus: 'EXPIRED' });
++
++      const used = (await t.http.get('/api/wallet?tab=USED').set(auth('vi')).expect(200)).body.data;
++      expect(used[0]).toMatchObject({ id: items[3].id, review: { canReview: true, hasReviewed: false } });
++      const refunded = (await t.http.get('/api/wallet?tab=REFUNDED').set(auth('vi')).expect(200)).body.data;
++      expect(refunded.map((v: { id: string }) => v.id)).toEqual([items[4].id]);
++
++      const all = (await t.http.get('/api/wallet').set(auth('vi')).expect(200)).body.data;
++      expect(all).toHaveLength(5);
++      for (const v of all) {
++        expect(v.secretKey).toBeUndefined();
++        expect(v.campaign.brand.bankInfo).toBeUndefined();
++      }
++      await t.http.get('/api/wallet?tab=ALL').set(auth('vi')).expect(400);
++    });
++
++    it('chi tiet voucher da mua: kem chi nhanh ap dung; chi chu so huu xem duoc', async () => {
++      const detail = (await t.http.get(`/api/wallet/${items[0].id}`).set(auth('vi')).expect(200)).body.data;
++      expect(detail.stores.map((s: { id: string }) => s.id)).toEqual([ID.store1]);
++      expect(detail).toMatchObject({ redemption: null, refundRequests: [], canRedeem: true });
++      expect(detail.secretKey).toBeUndefined();
++
++      await t.http.get(`/api/wallet/${items[0].id}`).set(auth('khac')).expect(404);
++      await t.http.get(`/api/wallet/${crypto.randomUUID()}`).set(auth('vi')).expect(404);
++      await t.http.get(`/api/wallet/${items[0].id}`).set(auth('staff')).expect(403);
++    });
++  });
++
++  // ================= F10 - ma redeem =================
++
++  describe('sinh ma redeem (task 8)', () => {
++    let item: VoucherItem;
++
++    beforeAll(async () => {
++      await newCustomer('ma');
++      [item] = await buy('ma', (await newCampaign('Ma QR')).id);
++    });
++
++    it('QR dang v1, khong chua id hay ma tra cuu voucher; OTP 6 so; han 60 giay', async () => {
++      const tk = await token('ma', item.id);
++      expect(tk.qrPayload).toMatch(/^v1\.[0-9a-f]{32}\.\d+\.[A-Za-z0-9_-]+$/);
++      expect(tk.qrPayload).not.toContain(item.id);
++      expect(tk.qrPayload).not.toContain(item.code);
++      expect(tk.otpCode).toMatch(/^\d{6}$/);
++      expect(tk.ttlSeconds).toBe(60);
++      const ttl = new Date(tk.expiresAt).getTime() - Date.now();
++      expect(ttl).toBeGreaterThan(55_000);
++      expect(ttl).toBeLessThanOrEqual(60_000);
++    });
++
++    it('sinh ma moi thi ma cu bi vo hieu (BR-06)', async () => {
++      const first = await token('ma', item.id);
++      await token('ma', item.id);
++      const old = await redeem({ qrPayload: first.qrPayload, billAmount: 100000 }).expect(400);
++      expect(old.body.error.reason).toBe('TOKEN_REVOKED');
++    });
++
++    it('chi chu so huu, voucher ACTIVE va chua het han', async () => {
++      await newCustomer('nguoila');
++      await t.http.post('/api/redeem/token').set(auth('nguoila')).send({ voucherItemId: item.id }).expect(404);
++
++      const [expired, pending] = await buy('ma', (await newCampaign('Ma het han')).id, 2);
++      await ds.getRepository(VoucherItem).update(expired.id, { expireAt: new Date(Date.now() - MINUTE) });
++      await ds.getRepository(VoucherItem).update(pending.id, { status: VoucherItemStatus.REFUND_PENDING });
++      const e = await t.http.post('/api/redeem/token').set(auth('ma')).send({ voucherItemId: expired.id }).expect(400);
++      expect(e.body.error.reason).toBe('VOUCHER_EXPIRED');
++      const p = await t.http.post('/api/redeem/token').set(auth('ma')).send({ voucherItemId: pending.id }).expect(400);
++      expect(p.body.error.reason).toBe('VOUCHER_REFUND_PENDING');
++    });
++
++    it('toi da 10 lan / 10 phut, lan 11 bi 429 kem thoi gian thu lai', async () => {
++      await newCustomer('spam');
++      const [v] = await buy('spam', (await newCampaign('Spam ma')).id);
++      for (let i = 0; i < 10; i++) await token('spam', v.id);
++      const res = await t.http.post('/api/redeem/token').set(auth('spam')).send({ voucherItemId: v.id }).expect(429);
++      expect(res.body.error.reason).toBe('TOKEN_RATE_LIMITED');
++      expect(res.body.error.details.retryAfterSeconds).toBeGreaterThan(0);
++
++      // 10 phut sau thi tao lai duoc
++      await ds.getRepository(RedeemToken).update({ voucherItemId: v.id }, { issuedAt: new Date(Date.now() - 11 * MINUTE) });
++      await token('spam', v.id);
++    });
++  });
++
++  // ================= F11 - xac nhan su dung =================
++
++  describe('xac nhan su dung (task 11, 14)', () => {
++    // Moi test mot khach rieng: moi khach chi duoc tao 10 ma / 10 phut (task 8)
++    let n = 0;
++    const fresh = async () => {
++      const name = `dung${++n}`;
++      await newCustomer(name);
++      return name;
++    };
++
++    it('quet QR thanh cong; quet lai bao "da dung luc ... tai ..."; lich su ca co hoa don', async () => {
++      const who = await fresh();
++      const [v] = await buy(who, (await newCampaign('Tra dao')).id);
++      const tk = await token(who, v.id);
++      const ok = (await redeem({ qrPayload: tk.qrPayload, billAmount: 120000 }).expect(201)).body.data;
++      expect(ok).toMatchObject({ voucherItemId: v.id, method: 'QR', billAmount: 120000, campaign: { title: 'Tra dao' } });
++      expect(new Date(ok.billEditableUntil).getTime()).toBeGreaterThan(Date.now() + 9 * MINUTE);
++      expect((await ds.getRepository(VoucherItem).findOneByOrFail({ id: v.id })).status).toBe(VoucherItemStatus.USED);
++
++      const again = await redeem({ qrPayload: tk.qrPayload, billAmount: 120000 }).expect(400);
++      expect(again.body.error.reason).toBe('VOUCHER_USED');
++      expect(again.body.error.message).toContain('lúc');
++      expect(again.body.error.details).toMatchObject({ storeId: ID.store1 });
++      expect(again.body.error.details.storeName).toBeTruthy();
++
++      const history = (await t.http.get('/api/redeem/history/today').set(auth('staff')).expect(200)).body.data;
++      expect(history.find((h: { voucherItemId: string }) => h.voucherItemId === v.id)).toMatchObject({
++        campaignTitle: 'Tra dao',
++        billAmount: 120000,
++        billEditable: true,
++        method: 'QR',
++      });
++    });
++
++    it('QR bi sua / gia / dinh dang cu bi tu choi; gui ca QR lan OTP bi tu choi', async () => {
++      const who = await fresh();
++      const [v] = await buy(who, (await newCampaign('QR gia')).id);
++      const tk = await token(who, v.id);
++      const [ver, nonce, exp, sig] = tk.qrPayload.split('.');
++      const tampered = await redeem({ qrPayload: [ver, nonce, String(Number(exp) + 600000), sig].join('.') }).expect(400);
++      expect(tampered.body.error.reason).toBe('TOKEN_INVALID');
++      const oldFormat = await redeem({ qrPayload: `${v.id}.${nonce}.${exp}.${sig}` }).expect(400);
++      expect(oldFormat.body.error.reason).toBe('TOKEN_INVALID');
++      const both = await redeem({ qrPayload: tk.qrPayload, otpCode: tk.otpCode }).expect(400);
++      expect(both.body.error.reason).toBe('CODE_REQUIRED');
++      // ma that van dung duoc sau cac lan thu sai
++      await redeem({ otpCode: tk.otpCode, billAmount: 100000 }).expect(201);
++    });
++
++    it('ma het han 60 giay thi bao het han', async () => {
++      const who = await fresh();
++      const [v] = await buy(who, (await newCampaign('Het 60s')).id);
++      const tk = await token(who, v.id);
++      await ds.getRepository(RedeemToken).update({ otpCode: tk.otpCode, voucherItemId: v.id }, { expiresAt: new Date(Date.now() - 1000) });
++      const res = await redeem({ otpCode: tk.otpCode, billAmount: 1 }).expect(400);
++      expect(res.body.error.reason).toBe('TOKEN_EXPIRED');
++    });
++
++    it('sai chi nhanh: bao kem danh sach chi nhanh ap dung, ma da bi tieu (FR-REDEEM-13)', async () => {
++      const who = await fresh();
++      const [v] = await buy(who, (await newCampaign('Chi nhanh 1')).id);
++      const tk = await token(who, v.id);
++      await selectStore(store2);
++      const wrong = await redeem({ storeId: store2, qrPayload: tk.qrPayload, billAmount: 1 }).expect(400);
++      await selectStore(ID.store1);
++      expect(wrong.body.error.reason).toBe('WRONG_STORE');
++      expect(wrong.body.error.details.stores.map((s: { id: string }) => s.id)).toEqual([ID.store1]);
++      const reuse = await redeem({ qrPayload: tk.qrPayload, billAmount: 1 }).expect(400);
++      expect(reuse.body.error.reason).toBe('TOKEN_USED');
++      expect((await ds.getRepository(VoucherItem).findOneByOrFail({ id: v.id })).status).toBe(VoucherItemStatus.ACTIVE);
++    });
++
++    it('chi nhanh trong yeu cau phai la chi nhanh dang chon trong phien', async () => {
++      const res = await redeem({ storeId: store2, otpCode: '123456' }).expect(400);
++      expect(res.body.error.reason).toBe('STORE_NOT_SELECTED');
++    });
++
++    it('BR-03: voucher menh gia thieu hoa don bi tu choi nhung ma CHUA bi tieu; voucher giam gia khong bat buoc', async () => {
++      const who = await fresh();
++      const [prepaid] = await buy(who, (await newCampaign('Menh gia')).id);
++      const tk = await token(who, prepaid.id);
++      const missing = await redeem({ otpCode: tk.otpCode }).expect(400);
++      expect(missing.body.error).toMatchObject({ reason: 'BILL_REQUIRED', details: { voucherType: 'PREPAID', faceValue: 100000 } });
++      await redeem({ otpCode: tk.otpCode, billAmount: 150000 }).expect(201);
++
++      const [discount] = await buy(who, (await newCampaign('Giam gia', VoucherType.DISCOUNT)).id);
++      const dt = await token(who, discount.id);
++      const ok = await redeem({ otpCode: dt.otpCode }).expect(201);
++      expect(ok.body.data.billAmount).toBeNull();
++    });
++
++    it('voucher dang cho hoan thi khong dung duoc', async () => {
++      const who = await fresh();
++      const [v] = await buy(who, (await newCampaign('Cho hoan')).id);
++      const tk = await token(who, v.id);
++      await ds.getRepository(VoucherItem).update(v.id, { status: VoucherItemStatus.REFUND_PENDING });
++      const res = await redeem({ qrPayload: tk.qrPayload, billAmount: 1 }).expect(400);
++      expect(res.body.error.reason).toBe('VOUCHER_REFUND_PENDING');
++    });
++
++    it('hai quay cung xac nhan mot ma: dung 1 lan thanh cong, khong ghi trung (BR-12)', async () => {
++      const who = await fresh();
++      const [v] = await buy(who, (await newCampaign('Dong thoi')).id);
++      const tk = await token(who, v.id);
++      const results = await Promise.all([
++        redeem({ otpCode: tk.otpCode, billAmount: 1 }),
++        redeem({ qrPayload: tk.qrPayload, billAmount: 1 }),
++      ]);
++      expect(results.map((r) => r.status).sort()).toEqual([201, 400]);
++      expect(await ds.getRepository(RedemptionLog).count({ where: { voucherItemId: v.id } })).toBe(1);
++    });
++
++    it('sua hoa don trong 10 phut; qua 10 phut hoac nguoi khac thi khong duoc (FR-REDEEM-08)', async () => {
++      const who = await fresh();
++      const [v] = await buy(who, (await newCampaign('Sua hoa don')).id);
++      const tk = await token(who, v.id);
++      const ok = (await redeem({ otpCode: tk.otpCode, billAmount: 100000 }).expect(201)).body.data;
++      const url = `/api/redeem/logs/${ok.redemptionLogId}/bill`;
++      const updated = (await t.http.patch(url).set(auth('staff')).send({ billAmount: 135000 }).expect(200)).body.data;
++      expect(updated).toMatchObject({ billAmount: 135000, billEditable: true });
++      expect(updated.billUpdatedAt).toBeTruthy();
++
++      tokens.staff2 = await t.login('staff@phuclong.local');
++      await t.http.patch(url).set(auth('staff2')).send({ billAmount: 1 }).expect(404);
++      await t.http.patch(url).set(auth('staff')).send({ billAmount: -5 }).expect(400);
++
++      await ds.getRepository(RedemptionLog).update(ok.redemptionLogId, { redeemedAt: new Date(Date.now() - 11 * MINUTE) });
++      const late = await t.http.patch(url).set(auth('staff')).send({ billAmount: 1 }).expect(400);
++      expect(late.body.error.reason).toBe('BILL_EDIT_EXPIRED');
++    });
++
++    it('sai OTP 5 lan / 5 phut -> khoa nhap OTP 15 phut; QR van dung duoc (FR-REDEEM-12)', async () => {
++      const who = await fresh();
++      const [a, b] = await buy(who, (await newCampaign('Khoa OTP', VoucherType.DISCOUNT)).id, 2);
++      const tk = await token(who, a.id);
++      const wrong = tk.otpCode === '000000' ? '000001' : '000000';
++      // Lui moc thoi gian cac lan sai / khoa ve 16 phut truoc = da het khoa
++      const expireLock = () =>
++        ds
++          .getRepository(AuditLog)
++          .createQueryBuilder()
++          .update()
++          .set({ createdAt: new Date(Date.now() - 16 * MINUTE) })
++          .where('"action" IN (:...actions)', { actions: ['REDEEM_OTP_FAILED', 'REDEEM_OTP_LOCKED'] })
++          .execute();
++      try {
++        for (let i = 1; i <= 4; i++) {
++          const res = await redeem({ otpCode: wrong }).expect(400);
++          expect(res.body.error).toMatchObject({ reason: 'OTP_INVALID', details: { remainingAttempts: 5 - i } });
++        }
++        const locked = await redeem({ otpCode: wrong }).expect(429);
++        expect(locked.body.error.reason).toBe('OTP_LOCKED');
++        expect(new Date(locked.body.error.details.lockedUntil).getTime()).toBeGreaterThan(Date.now() + 14 * MINUTE);
++        // dung OTP cung bi chan trong luc khoa
++        expect((await redeem({ otpCode: tk.otpCode }).expect(429)).body.error.reason).toBe('OTP_LOCKED');
++        // QR khong bi khoa
++        const qr = await token(who, b.id);
++        await redeem({ qrPayload: qr.qrPayload }).expect(201);
++
++        // 15 phut sau thi nhap OTP lai duoc
++        await expireLock();
++        await redeem({ otpCode: tk.otpCode }).expect(201);
++      } finally {
++        // khong de nhan vien bi khoa sang cac test sau
++        await expireLock();
++      }
++    });
++  });
++
++  // ================= F12 - hoan tien =================
++
++  describe('hoan tien (task 15, 16)', () => {
++    const refund = (who: string, voucherItemId: string) =>
++      t.http.post('/api/refunds').set(auth(who)).send({ voucherItemId, reason: 'Đổi kế hoạch' }).expect(201);
++
++    beforeAll(async () => {
++      await newCustomer('hoan');
++    });
++
++    it('thanh cong: REFUNDED, ghi PaymentRefund, cong refundedAmount, tra ton kho', async () => {
++      const c = await newCampaign('Hoan thanh cong');
++      const [v] = await buy('hoan', c.id);
++      const res = (await refund('hoan', v.id)).body.data;
++      expect(res).toMatchObject({ status: 'COMPLETED', amount: 50000, campaignTitle: 'Hoan thanh cong', voucherStatus: 'REFUNDED' });
++      expect(res.paymentRefund).toMatchObject({ mode: 'AUTO', status: 'COMPLETED' });
++      expect(res.paymentRefund.gatewayRefundId).toMatch(/^SBX-RF-/);
++      expect((await ds.getRepository(VoucherCampaign).findOneByOrFail({ id: c.id })).soldQuantity).toBe(0);
++
++      const wallet = (await t.http.get(`/api/wallet/${v.id}`).set(auth('hoan')).expect(200)).body.data;
++      expect(wallet).toMatchObject({ tab: 'REFUNDED', refund: { canRefund: false, reasonCode: 'VOUCHER_REFUNDED' } });
++      expect(wallet.refundRequests[0]).toMatchObject({ status: 'COMPLETED' });
++    });
++
++    it('chien dich da ENDED thi khong tra ton kho', async () => {
++      const c = await newCampaign('Da ket thuc');
++      const [v] = await buy('hoan', c.id);
++      await ds.getRepository(VoucherCampaign).update(c.id, { status: CampaignStatus.ENDED });
++      expect((await refund('hoan', v.id)).body.data.status).toBe('COMPLETED');
++      expect((await ds.getRepository(VoucherCampaign).findOneByOrFail({ id: c.id })).soldQuantity).toBe(1);
++    });
++
++    it('cong tu choi: yeu cau FAILED, voucher ve ACTIVE, ghi giao dich hoan that bai', async () => {
++      process.env.REFUND_SANDBOX_RESULT = 'declined';
++      const [v] = await buy('hoan', (await newCampaign('Cong tu choi')).id);
++      const res = (await refund('hoan', v.id)).body.data;
++      expect(res).toMatchObject({ status: 'FAILED', voucherStatus: 'ACTIVE' });
++      expect(res.rejectReason).toContain('từ chối');
++      const failed = await ds.getRepository(PaymentRefund).find({ where: { status: PaymentRefundStatus.FAILED } });
++      expect(failed.length).toBeGreaterThan(0);
++    });
++
++    it('cong tu choi khi voucher da qua han: voucher ve EXPIRED', async () => {
++      process.env.REFUND_SANDBOX_RESULT = 'declined';
++      const [v] = await buy('hoan', (await newCampaign('Tu choi het han')).id);
++      await refund('hoan', v.id);
++      // het han trong luc cho cong: tao lai tinh huong bang yeu cau dang xu ly roi danh dau that bai thu cong
++      const [w] = await buy('hoan', (await newCampaign('Het han khi cho')).id);
++      process.env.REFUND_MODE = 'manual';
++      const pending = (await refund('hoan', w.id)).body.data;
++      await ds.getRepository(VoucherItem).update(w.id, { expireAt: new Date(Date.now() - MINUTE) });
++      await t.http.patch(`/api/refunds/${pending.id}/fail-manual`).set(auth('admin')).send({ reason: 'Tài khoản khách đã đóng' }).expect(200);
++      expect((await ds.getRepository(VoucherItem).findOneByOrFail({ id: w.id })).status).toBe(VoucherItemStatus.EXPIRED);
++    });
++
++    it('cong khong phan hoi -> MANUAL_PENDING, voucher giu REFUND_PENDING (FR-REFUND-06)', async () => {
++      process.env.REFUND_SANDBOX_RESULT = 'unavailable';
++      const [v] = await buy('hoan', (await newCampaign('Cong loi')).id);
++      const res = (await refund('hoan', v.id)).body.data;
++      expect(res).toMatchObject({ status: 'MANUAL_PENDING', voucherStatus: 'REFUND_PENDING' });
++      const wallet = (await t.http.get('/api/wallet?tab=ACTIVE').set(auth('hoan')).expect(200)).body.data;
++      expect(wallet.find((w: { id: string }) => w.id === v.id)).toMatchObject({ statusLabel: 'Đang hoàn tiền', canRedeem: false });
++    });
++
++    it('khong du dieu kien: qua han hoan / dang co yeu cau xu ly -> REJECTED kem ly do', async () => {
++      const [late, twice] = await buy('hoan', (await newCampaign('Khong du dk')).id, 2);
++      await ds.getRepository(VoucherItem).update(late.id, { refundableUntil: new Date(Date.now() - MINUTE) });
++      const r1 = (await refund('hoan', late.id)).body.data;
++      expect(r1.status).toBe('REJECTED');
++      expect(r1.rejectReason).toContain('quá hạn hoàn tiền');
++
++      process.env.REFUND_MODE = 'manual';
++      expect((await refund('hoan', twice.id)).body.data.status).toBe('MANUAL_PENDING');
++      const r2 = (await refund('hoan', twice.id)).body.data;
++      expect(r2).toMatchObject({ status: 'REJECTED' });
++      expect(r2.rejectReason).toContain('đang có yêu cầu');
++    });
++
++    it('hang doi quan tri: xac nhan da hoan (bat buoc ma GD), khong hoan duoc, AuditLog, khach theo doi duoc', async () => {
++      process.env.REFUND_MODE = 'manual';
++      const [ok, ko] = await buy('hoan', (await newCampaign('Hang doi')).id, 2);
++      const a = (await refund('hoan', ok.id)).body.data;
++      const b = (await refund('hoan', ko.id)).body.data;
++
++      const queue = (await t.http.get('/api/refunds/manual-pending').set(auth('admin')).expect(200)).body.data;
++      const row = queue.find((q: { id: string }) => q.id === a.id);
++      expect(row).toMatchObject({ amount: 50000, campaignTitle: 'Hang doi', customer: { email: 'hoan@usage.local' } });
++      expect(row.payment.amount).toBe(100000);
++      expect(row.customer.passwordHash).toBeUndefined();
++      await t.http.get('/api/refunds/manual-pending').set(auth('staff')).expect(403);
++
++      await t.http.patch(`/api/refunds/${a.id}/confirm-manual`).set(auth('admin')).send({ gatewayRefundId: ' ' }).expect(400);
++      await t.http.patch(`/api/refunds/${a.id}/confirm-manual`).set(auth('admin')).send({ gatewayRefundId: 'VCB-123' }).expect(200);
++      await t.http.patch(`/api/refunds/${a.id}/confirm-manual`).set(auth('admin')).send({ gatewayRefundId: 'VCB-123' }).expect(400);
++
++      await t.http.patch(`/api/refunds/${b.id}/fail-manual`).set(auth('admin')).send({ reason: '' }).expect(400);
++      await t.http.patch(`/api/refunds/${b.id}/fail-manual`).set(auth('admin')).send({ reason: 'Ngân hàng trả về lỗi' }).expect(200);
++      expect((await ds.getRepository(VoucherItem).findOneByOrFail({ id: ko.id })).status).toBe(VoucherItemStatus.ACTIVE);
++
++      const audits = await ds.getRepository(AuditLog).find({ where: [{ entityId: a.id }, { entityId: b.id }] });
++      expect(audits.map((x) => x.action).sort()).toEqual(['CONFIRM_MANUAL_REFUND', 'FAIL_MANUAL_REFUND']);
++
++      const mine = (await t.http.get('/api/refunds/me').set(auth('hoan')).expect(200)).body.data;
++      expect(mine.find((m: { id: string }) => m.id === a.id)).toMatchObject({ status: 'COMPLETED', paymentRefund: { mode: 'MANUAL', gatewayRefundId: 'VCB-123' } });
++      expect(mine.find((m: { id: string }) => m.id === b.id)).toMatchObject({ status: 'FAILED', rejectReason: 'Ngân hàng trả về lỗi' });
++      expect((await ds.getRepository(RefundRequest).findOneByOrFail({ id: b.id })).status).toBe(RefundRequestStatus.FAILED);
++    });
++
++    it('DC-12: tong hoan khong vuot so tien da thanh toan', async () => {
++      const [v] = await buy('hoan', (await newCampaign('DC12')).id);
++      const order = await ds.getRepository(VoucherItem).findOneOrFail({ where: { id: v.id }, relations: ['order'] });
++      const payment = (await ds.query('SELECT "id" FROM "payments" WHERE "orderId" = $1', [order.orderId]))[0];
++      await ds.getRepository(PaymentRefund).save({
++        paymentId: payment.id, amount: 50000, reasonType: 'MISMATCH', mode: 'MANUAL', status: PaymentRefundStatus.COMPLETED,
++      } as Partial<PaymentRefund>);
++      const res = (await refund('hoan', v.id)).body.data;
++      expect(res.status).toBe('FAILED');
++      expect(res.rejectReason).toContain('DC-12');
++    });
++
++    it('hang doi don lech so tien co ten chien dich va khach, khong lo mat khau', async () => {
++      const list = (await t.http.get('/api/admin/payment-mismatches').set(auth('admin')).expect(200)).body.data;
++      for (const o of list) expect(o.customer?.passwordHash).toBeUndefined();
++    });
++  });
++
++  // ================= F15 - danh gia =================
++
++  describe('danh gia (task 18)', () => {
++    let campaign: VoucherCampaign;
++
++    beforeAll(async () => {
++      await newCustomer('review');
++      await newCustomer('chuadung');
++      campaign = await newCampaign('Danh gia', VoucherType.DISCOUNT);
++      const [v] = await buy('review', campaign.id);
++      await buy('chuadung', campaign.id);
++      const tk = await token('review', v.id);
++      await redeem({ otpCode: tk.otpCode }).expect(201);
++    });
++
++    it('chi khach co voucher USED duoc danh gia, 1 lan / chien dich (BR-10, DC-09)', async () => {
++      const no = (await t.http.get(`/api/campaigns/${campaign.id}/reviews/eligibility`).set(auth('chuadung')).expect(200)).body.data;
++      expect(no).toMatchObject({ canReview: false, reasonCode: 'REVIEW_NOT_ELIGIBLE' });
++      const denied = await t.http.post('/api/reviews').set(auth('chuadung')).send({ campaignId: campaign.id, rating: 5 }).expect(400);
++      expect(denied.body.error.reason).toBe('REVIEW_NOT_ELIGIBLE');
++
++      const yes = (await t.http.get(`/api/campaigns/${campaign.id}/reviews/eligibility`).set(auth('review')).expect(200)).body.data;
++      expect(yes.canReview).toBe(true);
++      await t.http.post('/api/reviews').set(auth('review')).send({ campaignId: campaign.id, rating: 6 }).expect(400);
++      const created = (await t.http.post('/api/reviews').set(auth('review')).send({ campaignId: campaign.id, rating: 4, comment: 'Ngon' }).expect(201)).body.data;
++      expect(created).toMatchObject({ campaignId: campaign.id, rating: 4 });
++      const twice = await t.http.post('/api/reviews').set(auth('review')).send({ campaignId: campaign.id, rating: 5 }).expect(400);
++      expect(twice.body.error.reason).toBe('REVIEW_EXISTS');
++      const after = (await t.http.get(`/api/campaigns/${campaign.id}/reviews/eligibility`).set(auth('review')).expect(200)).body.data;
++      expect(after).toMatchObject({ canReview: false, reasonCode: 'REVIEW_EXISTS', reviewId: created.id });
++    });
++
++    it('danh sach cong khai (Guest xem duoc) co diem trung binh; ten nguoi danh gia duoc che', async () => {
++      // them 1 danh gia 2 sao cua khach khac de kiem diem trung binh
++      await newCustomer('review2');
++      const [v] = await buy('review2', campaign.id);
++      const tk = await token('review2', v.id);
++      await redeem({ otpCode: tk.otpCode }).expect(201);
++      await t.http.post('/api/reviews').set(auth('review2')).send({ campaignId: campaign.id, rating: 2 }).expect(201);
++
++      const res = await t.http.get(`/api/campaigns/${campaign.id}/reviews?pageSize=1`).expect(200);
++      expect(res.body.data).toMatchObject({ avgRating: 3, reviewCount: 2, total: 2 });
++      expect(res.body.data.items).toHaveLength(1);
++      expect(res.body.meta).toMatchObject({ page: 1, pageSize: 1, total: 2 });
++      expect(res.body.data.items[0].reviewerName).toBe('review2 N.');
++      expect(res.body.data.items[0].userId).toBeUndefined();
++    });
++
++    it('thuong hieu phan hoi 1 lan, chi thuong hieu so huu; quan tri an danh gia -> diem trung binh doi, ghi AuditLog', async () => {
++      const review = await ds.getRepository(Review).findOneByOrFail({ userId: users.review2.id });
++      await t.http.patch(`/api/reviews/${review.id}/reply`).set(auth('otherOwner')).send({ reply: 'Xin lỗi' }).expect(403);
++      await t.http.patch(`/api/reviews/${review.id}/reply`).set(auth('owner')).send({ reply: ' ' }).expect(400);
++      await t.http.patch(`/api/reviews/${review.id}/reply`).set(auth('owner')).send({ reply: 'Xin lỗi bạn' }).expect(200);
++      const again = await t.http.patch(`/api/reviews/${review.id}/reply`).set(auth('owner')).send({ reply: 'Lần 2' }).expect(400);
++      expect(again.body.error.reason).toBe('REVIEW_ALREADY_REPLIED');
++
++      await t.http.patch(`/api/admin/reviews/${review.id}/hide`).set(auth('owner')).send({ reason: 'x' }).expect(403);
++      const hidden = (await t.http.patch(`/api/admin/reviews/${review.id}/hide`).set(auth('admin')).send({ reason: 'Ngôn từ không phù hợp' }).expect(200)).body.data;
++      expect(hidden).toMatchObject({ status: ReviewStatus.HIDDEN, avgRating: 4, reviewCount: 1 });
++      await t.http.patch(`/api/admin/reviews/${review.id}/hide`).set(auth('admin')).send({ reason: 'x' }).expect(400);
++
++      const pub = (await t.http.get(`/api/campaigns/${campaign.id}/reviews`).expect(200)).body.data;
++      expect(pub.items.map((r: { id: string }) => r.id)).not.toContain(review.id);
++      const brandView = (await t.http.get(`/api/brands/${ID.brand}/reviews`).set(auth('owner')).expect(200)).body.data;
++      expect(brandView.find((r: { id: string }) => r.id === review.id)).toMatchObject({ status: 'HIDDEN', campaignTitle: 'Danh gia' });
++
++      const admin = (await t.http.get('/api/admin/reviews?status=HIDDEN').set(auth('admin')).expect(200)).body.data;
++      expect(admin.items.map((r: { id: string }) => r.id)).toContain(review.id);
++      expect(admin.items[0].brandName).toBeTruthy();
++
++      await t.http.patch(`/api/admin/reviews/${review.id}/unhide`).set(auth('admin')).expect(200);
++      const audits = await ds.getRepository(AuditLog).find({ where: { entityId: review.id } });
++      expect(audits.map((a) => a.action).sort()).toEqual(['HIDE_REVIEW', 'UNHIDE_REVIEW']);
++      expect(audits.find((a) => a.action === 'HIDE_REVIEW')?.detail).toEqual({ reason: 'Ngôn từ không phù hợp' });
++    });
++
++    it('vi: sau khi danh gia, voucher USED khong con nut danh gia', async () => {
++      const used = (await t.http.get('/api/wallet?tab=USED').set(auth('review')).expect(200)).body.data;
++      expect(used[0].review).toEqual({ hasReviewed: true, canReview: false });
++    });
++  });
++});
+
+base-commit: be8334fe098e8fbb0e244defa8278987bf4e3e9a
+-- 
+2.49.0.windows.1
+

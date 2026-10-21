@@ -93,7 +93,8 @@ describe('F16 - thong bao (e2e)', () => {
     await t.http
       .post('/api/redeem')
       .set(auth('staff'))
-      .send({ storeId: ID.store1, otpCode: token.body.data.otpCode })
+      // BR-03: voucher menh gia (PREPAID) bat buoc nhap gia tri hoa don
+      .send({ storeId: ID.store1, otpCode: token.body.data.otpCode, billAmount: 120000 })
       .expect(201);
 
     const used = (await myNotifications('lan')).data.items.find((n: { type: string }) => n.type === 'VOUCHER_USED');

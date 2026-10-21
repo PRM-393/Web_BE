@@ -117,8 +117,15 @@ export class ReportService {
   }
 
   async paymentMismatches() {
-    const orders = await this.orderRepo.find({ where: { status: OrderStatus.PAYMENT_MISMATCH }, order: { createdAt: 'ASC' } });
-    return Promise.all(orders.map(async order => ({ ...order,
+    const orders = await this.orderRepo.find({
+      where: { status: OrderStatus.PAYMENT_MISMATCH },
+      relations: ['campaign', 'user'],
+      order: { createdAt: 'ASC' },
+    });
+    // UC-07: kem ten chien dich + khach de quan tri vien doi chieu; khong tra passwordHash / thong tin noi bo
+    return Promise.all(orders.map(async ({ user, campaign, ...order }) => ({ ...order,
+      campaignTitle: campaign?.title ?? null,
+      customer: user ? { id: user.id, email: user.email, fullName: user.fullName ?? null, phone: user.phone ?? null } : null,
       payments: (await this.db.getRepository(Payment).find({ where: { orderId: order.id, status: PaymentStatus.SUCCESS } }))
         .map(p => ({ id: p.id, gatewayTxnId: p.gatewayTxnId, amount: Number(p.amount) })),
     })));

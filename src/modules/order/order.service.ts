@@ -158,16 +158,6 @@ export class OrderService {
     return order;
   }
 
-  // FR-REDEEM-01: voucher cua khach kem thong tin chien dich; bo secretKey khoi response (NFR-SEC-05)
-  async findMyVouchers(userId: string) {
-    const items = await this.voucherItemRepo.find({
-      where: { userId },
-      relations: ['campaign'],
-      order: { issuedAt: 'DESC' },
-    });
-    return items.map(({ secretKey: _secretKey, ...rest }) => rest);
-  }
-
   // ================= Nhan ket qua thanh toan (FR-ORDER-05..08, BR-11, BR-18, BR-20, DC-04, DC-11) =================
 
   // Webhook JSON chung: xac thuc chu ky truoc moi xu ly

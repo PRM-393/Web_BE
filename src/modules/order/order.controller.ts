@@ -64,15 +64,6 @@ export class OrderController {
     return this.orderService.retryPayment(user.userId, id);
   }
 
-  // FR-REDEEM-01: vi voucher cua khach hang (app Flutter tu chia tab theo trang thai)
-  @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.CUSTOMER)
-  @Get('wallet')
-  myWallet(@CurrentUser() user: CurrentUserPayload) {
-    return this.orderService.findMyVouchers(user.userId);
-  }
-
   // Webhook JSON chung, ky HMAC-SHA256 (khong dung JWT)
   @Post('orders/payment-webhook')
   @HttpCode(200)

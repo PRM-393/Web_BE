@@ -50,6 +50,14 @@ services:
         value: "7"
       - key: REFUND_MIN_DAYS_BEFORE_EXPIRE
         value: "3"
+      # F10/F11: khoa ky ma QR redeem do Render tu sinh, khong nam trong repo
+      - key: REDEEM_HMAC_SECRET
+        generateValue: true
+      # F12: auto = goi cong hoan (dang dung cong gia lap sandbox), manual = vao hang doi quan tri
+      - key: REFUND_MODE
+        value: auto
+      - key: REFUND_SANDBOX_RESULT
+        value: success
       - key: DEFAULT_COMMISSION_RATE
         value: "0.1"
       - key: PAYMENT_GATEWAY

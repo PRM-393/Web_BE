@@ -1,7 +1,8 @@
 import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { EngageService } from './engage.service';
-import { CreateReviewDto } from './dto/create-review.dto';
+import { ReviewService } from './review.service';
+import { CreateReviewDto, ReplyReviewDto } from './dto/create-review.dto';
 import { CreateFavoriteDto } from './dto/create-favorite.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { BrandResourceGuard } from '../../common/guards/brand-resource.guard';
@@ -15,24 +16,27 @@ import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current
 @UseGuards(JwtAuthGuard, RolesGuard, BrandResourceGuard)
 @Controller()
 export class EngageController {
-  constructor(private readonly engageService: EngageService) {}
+  constructor(
+    private readonly engageService: EngageService,
+    private readonly reviewService: ReviewService,
+  ) {}
 
   @Roles(Role.CUSTOMER)
   @Post('reviews')
   createReview(@CurrentUser() user: CurrentUserPayload, @Body() dto: CreateReviewDto) {
-    return this.engageService.createReview(user.userId, dto);
+    return this.reviewService.create(user.userId, dto);
   }
 
   @Roles(Role.BRAND_OWNER)
   @Patch('reviews/:id/reply')
-  reply(@Param('id') id: string, @Body('reply') reply: string) {
-    return this.engageService.replyReview(id, reply);
+  reply(@Param('id') id: string, @Body() dto: ReplyReviewDto) {
+    return this.reviewService.reply(id, dto.reply);
   }
 
   @Roles(Role.BRAND_OWNER, Role.CUSTOMER, Role.ADMIN)
   @Get('brands/:brandId/reviews')
   listByBrand(@Param('brandId') brandId: string) {
-    return this.engageService.listReviewsByBrand(brandId);
+    return this.reviewService.listByBrand(brandId);
   }
 
   @Roles(Role.CUSTOMER)

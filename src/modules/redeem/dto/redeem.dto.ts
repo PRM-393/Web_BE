@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNumber, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min } from 'class-validator';
 
 // FR-REDEEM-02: khach hang xin token QR dong
 export class RequestTokenDto {
@@ -8,24 +8,36 @@ export class RequestTokenDto {
   voucherItemId: string;
 }
 
-// FR-REDEEM-05/06: nhan vien redeem bang QR (nonce) hoac OTP fallback
+// FR-REDEEM-05/06: nhan vien gui nguyen chuoi QR (may chu kiem chu ky) hoac OTP 6 so. Chi gui mot trong hai.
 export class RedeemDto {
   @ApiProperty()
   @IsUUID()
   storeId: string;
 
-  @ApiProperty({ required: false, description: 'Chuoi ngau nhien lay tu QR' })
+  @ApiProperty({ required: false, description: 'Nguyen chuoi doc tu ma QR: v1.<nonce>.<expiresAtMs>.<chu ky>' })
   @IsOptional()
   @IsString()
-  nonce?: string;
+  @MaxLength(200)
+  qrPayload?: string;
 
   @ApiProperty({ required: false, description: 'Ma OTP 6 chu so, dung khi khong quet duoc QR' })
   @IsOptional()
-  @IsString()
+  @Matches(/^\d{6}$/, { message: 'Mã OTP gồm đúng 6 chữ số.' })
   otpCode?: string;
 
-  @ApiProperty({ required: false, description: 'Gia tri hoa don thuc te - FR-REDEEM-08' })
+  @ApiProperty({ required: false, description: 'Gia tri hoa don (VND); bat buoc voi voucher menh gia - BR-03' })
   @IsOptional()
-  @IsNumber()
+  @IsInt()
+  @Min(0)
+  @Max(10_000_000_000)
   billAmount?: number;
+}
+
+// FR-REDEEM-08: sua gia tri hoa don trong 10 phut sau khi xac nhan
+export class UpdateBillDto {
+  @ApiProperty()
+  @IsInt()
+  @Min(0)
+  @Max(10_000_000_000)
+  billAmount: number;
 }

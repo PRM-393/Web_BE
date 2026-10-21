@@ -15,6 +15,7 @@ import { SettlementModule } from './modules/settlement/settlement.module';
 import { ReportModule } from './modules/report/report.module';
 import { EngageModule } from './modules/engage/engage.module';
 import { NotificationModule } from './modules/notification/notification.module';
+import { WalletModule } from './modules/wallet/wallet.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { NotificationModule } from './modules/notification/notification.module';
     ReportModule,
     EngageModule,
     NotificationModule,
+    WalletModule,
   ],
   controllers: [HealthController],
 })
