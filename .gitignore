@@ -23,3 +23,6 @@ Thumbs.db
 
 # test coverage
 coverage/
+
+# file tam cua kiem thu tich hop (test/helpers/serve-memory.ts)
+.e2e-*.json
