@@ -45,20 +45,4 @@ export class EngageController {
   myFavorites(@CurrentUser() user: CurrentUserPayload) {
     return this.engageService.listFavorites(user.userId);
   }
-
-  @Roles(Role.CUSTOMER, Role.BRAND_OWNER, Role.STORE_STAFF, Role.ADMIN)
-  @Get('notifications/me')
-  myNotifications(@CurrentUser() user: CurrentUserPayload) {
-    return this.engageService.listMyNotifications(user.userId);
-  }
-
-  @Roles(Role.CUSTOMER, Role.BRAND_OWNER, Role.STORE_STAFF, Role.ADMIN)
-  @Post('notifications/device-token')
-  registerDevice(
-    @CurrentUser() user: CurrentUserPayload,
-    @Body('token') token: string,
-    @Body('platform') platform: string,
-  ) {
-    return this.engageService.registerDeviceToken(user.userId, token, platform);
-  }
 }

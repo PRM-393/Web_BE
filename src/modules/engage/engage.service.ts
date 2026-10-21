@@ -3,8 +3,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Review } from '../../entities/review.entity';
 import { Favorite } from '../../entities/favorite.entity';
-import { Notification } from '../../entities/notification.entity';
-import { DeviceToken } from '../../entities/device-token.entity';
 import { VoucherItem } from '../../entities/voucher-item.entity';
 import { VoucherItemStatus } from '../../common/enums/status.enum';
 import { CreateReviewDto } from './dto/create-review.dto';
@@ -15,8 +13,6 @@ export class EngageService {
   constructor(
     @InjectRepository(Review) private readonly reviewRepo: Repository<Review>,
     @InjectRepository(Favorite) private readonly favoriteRepo: Repository<Favorite>,
-    @InjectRepository(Notification) private readonly notificationRepo: Repository<Notification>,
-    @InjectRepository(DeviceToken) private readonly deviceTokenRepo: Repository<DeviceToken>,
     @InjectRepository(VoucherItem) private readonly voucherItemRepo: Repository<VoucherItem>,
   ) {}
 
@@ -72,27 +68,4 @@ export class EngageService {
     return this.favoriteRepo.find({ where: { userId } });
   }
 
-  // FR-ENGAGE-06/07: gui thong bao day - TODO: tich hop Firebase Cloud Messaging that su
-  async notify(userId: string, type: string, title: string, body: string) {
-    const notification = await this.notificationRepo.save(
-      this.notificationRepo.create({ userId, type, title, body }),
-    );
-    const tokens = await this.deviceTokenRepo.find({ where: { userId } });
-    // TODO: goi Firebase Admin SDK gui push toi tokens.map(t => t.token)
-    return { notification, devicesNotified: tokens.length };
-  }
-
-  listMyNotifications(userId: string) {
-    return this.notificationRepo.find({ where: { userId }, order: { createdAt: 'DESC' } });
-  }
-
-  async registerDeviceToken(userId: string, token: string, platform: string) {
-    const existing = await this.deviceTokenRepo.findOne({ where: { token } });
-    if (existing) {
-      existing.userId = userId;
-      existing.platform = platform;
-      return this.deviceTokenRepo.save(existing);
-    }
-    return this.deviceTokenRepo.save(this.deviceTokenRepo.create({ userId, token, platform }));
-  }
 }

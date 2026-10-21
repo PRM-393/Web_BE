@@ -7,7 +7,8 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 
-// Chuan hoa loi tra ve, khong ro ri thong tin ky thuat cho nguoi dung cuoi - NFR-USA-02
+// Chuan hoa loi tra ve theo dinh dang { data, error, meta } (F01), khong ro ri thong tin ky thuat - NFR-USA-02.
+// error.message luon la chuoi de hien thang cho nguoi dung; loi validation nhieu dong duoc noi bang xuong dong.
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost) {
@@ -22,14 +23,26 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     const message =
       exception instanceof HttpException
-        ? exception.getResponse()
+        ? messageOf(exception.getResponse())
         : 'Da co loi xay ra, vui long thu lai sau.';
 
     response.status(status).json({
-      statusCode: status,
-      path: request.url,
-      timestamp: new Date().toISOString(),
-      message,
+      data: null,
+      error: {
+        code: status,
+        message,
+        path: request.url,
+        timestamp: new Date().toISOString(),
+      },
+      meta: null,
     });
   }
+}
+
+function messageOf(body: string | object): string {
+  if (typeof body === 'string') return body;
+  const m = (body as { message?: unknown }).message;
+  if (Array.isArray(m)) return m.join('\n');
+  if (typeof m === 'string') return m;
+  return 'Yeu cau khong hop le.';
 }

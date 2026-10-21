@@ -50,6 +50,14 @@ export class Order {
   @Column({ type: 'enum', enum: OrderStatus, default: OrderStatus.PENDING })
   status: OrderStatus;
 
+  // Ma so don gui sang payOS (orderCode phai la so nguyen duy nhat) - FR-ORDER-04
+  @Column({ type: 'bigint', unique: true, nullable: true })
+  paymentOrderCode: string | null;
+
+  // Lien ket thanh toan payOS, het han cung reservedUntil; dung lai khi khach bam thanh toan lai (FR-ORDER-12)
+  @Column({ type: 'text', nullable: true })
+  paymentUrl: string | null;
+
   // giu cho ton kho toi da 15 phut - FR-ORDER-03, BR-02
   @Column({ type: DATETIME })
   reservedUntil: Date;
