@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { BrandService } from './brand.service';
 import { CreateBrandDto } from './dto/create-brand.dto';
 import { CreateStoreDto } from './dto/create-store.dto';
+import { UpdateStoreDto } from './dto/update-store.dto';
 import { CreateStaffDto } from './dto/create-staff.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { BrandResourceGuard } from '../../common/guards/brand-resource.guard';
@@ -57,6 +58,14 @@ export class BrandController {
   @Get(':id/stores')
   listStores(@Param('id') brandId: string) {
     return this.brandService.findStores(brandId);
+  }
+
+  // FR-BRAND-04: sua chi nhanh, hoac mo lai chi nhanh da vo hieu (status = true)
+  @UseGuards(JwtAuthGuard, RolesGuard, BrandResourceGuard)
+  @Roles(Role.BRAND_OWNER)
+  @Patch('stores/:storeId')
+  updateStore(@Param('storeId') storeId: string, @Body() dto: UpdateStoreDto) {
+    return this.brandService.updateStore(storeId, dto);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard, BrandResourceGuard)
