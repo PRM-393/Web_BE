@@ -9,6 +9,9 @@ import { CampaignStore } from '../../entities/campaign-store.entity';
 import { StaffAssignment } from '../../entities/staff-assignment.entity';
 import { RedeemMethod, VoucherItemStatus } from '../../common/enums/status.enum';
 import { RequestTokenDto, RedeemDto } from './dto/redeem.dto';
+import { NotificationService } from '../notification/notification.service';
+import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
+import { Store } from '../../entities/store.entity';
 
 @Injectable()
 export class RedeemService {
@@ -20,6 +23,7 @@ export class RedeemService {
     @InjectRepository(StaffAssignment)
     private readonly staffAssignmentRepo: Repository<StaffAssignment>,
     private readonly dataSource: DataSource,
+    private readonly notifications: NotificationService,
   ) {}
 
   // FR-REDEEM-02/03, BR-06: sinh token QR (chu ky HMAC) + ma OTP tuong ung, het han 60 giay, dung mot lan
@@ -96,7 +100,7 @@ export class RedeemService {
       throw new BadRequestException('Ma da het han, vui long yeu cau ma moi.');
     }
 
-    return this.dataSource.transaction(async (manager) => {
+    const result = await this.dataSource.transaction(async (manager) => {
       // NFR-REL-03 / BR-12: khoa ban ghi voucher (pessimistic lock) de chong redeem trung khi truy cap dong thoi
       const item = await manager
         .createQueryBuilder(VoucherItem, 'v')
@@ -136,9 +140,31 @@ export class RedeemService {
       });
       await manager.save(log);
 
-      // TODO: gui thong bao cho khach hang (FR-REDEEM-09)
-      return { message: 'Redeem thanh cong.', voucherItemId: item.id, redeemedAt: log.redeemedAt };
+      return {
+        message: 'Redeem thanh cong.',
+        voucherItemId: item.id,
+        redeemedAt: log.redeemedAt,
+        userId: item.userId,
+        campaignId: item.campaignId,
+      };
     });
+
+    // FR-REDEEM-09 (F16): bao cho khach SAU khi commit, loi gui thong bao khong lam hong redeem
+    const { userId, campaignId, ...response } = result;
+    await this.notifyUsed(userId, result.voucherItemId, campaignId, dto.storeId);
+    return response;
+  }
+
+  private async notifyUsed(userId: string, voucherItemId: string, campaignId: string, storeId: string) {
+    try {
+      const [campaign, store] = await Promise.all([
+        this.dataSource.getRepository(VoucherCampaign).findOne({ where: { id: campaignId } }),
+        this.dataSource.getRepository(Store).findOne({ where: { id: storeId } }),
+      ]);
+      await this.notifications.voucherUsed(userId, voucherItemId, campaign?.title ?? 'Voucher', store?.name);
+    } catch {
+      // thong bao la phu, khong tra loi cho nhan vien cua hang
+    }
   }
 
   // FR-AUTH-12: danh sach chi nhanh dang duoc gan (active) cho nhan vien

@@ -18,6 +18,7 @@ import {
   VoucherItemStatus,
 } from '../../common/enums/status.enum';
 import { CreateRefundDto } from './dto/create-refund.dto';
+import { NotificationService } from '../notification/notification.service';
 
 @Injectable()
 export class RefundService {
@@ -27,7 +28,24 @@ export class RefundService {
     @InjectRepository(VoucherCampaign)
     private readonly campaignRepo: Repository<VoucherCampaign>,
     private readonly dataSource: DataSource,
+    private readonly notifications: NotificationService,
   ) {}
+
+  // F16 (FR-REFUND-09): bao ket qua hoan tien cho khach; loi gui thong bao khong lam hong yeu cau hoan
+  private async notifyResult(refund: RefundRequest) {
+    const messages: Partial<Record<RefundRequestStatus, string>> = {
+      [RefundRequestStatus.COMPLETED]: 'Yêu cầu hoàn tiền của bạn đã hoàn tất, tiền sẽ về tài khoản thanh toán.',
+      [RefundRequestStatus.REJECTED]: `Yêu cầu hoàn tiền bị từ chối: ${refund.rejectReason ?? 'không đủ điều kiện'}.`,
+      [RefundRequestStatus.MANUAL_PENDING]: 'Yêu cầu hoàn tiền đang được quản trị viên xử lý thủ công.',
+    };
+    const message = messages[refund.status];
+    if (!message) return;
+    try {
+      await this.notifications.refundResult(refund.userId, refund.id, refund.status, message);
+    } catch {
+      // thong bao la phu
+    }
+  }
 
   // UC-03, FR-REFUND-01..06, BR-05: tu dong xet duyet theo quy tac, khong can nguoi phe duyet
   async requestRefund(userId: string, dto: CreateRefundDto) {
@@ -50,10 +68,13 @@ export class RefundService {
       refund.rejectReason = eligibility.reason || 'Khong du dieu kien hoan tien.';
       refund.decidedAt = new Date();
       await this.refundRepo.save(refund);
+      await this.notifyResult(refund);
       return refund;
     }
 
-    return this.processRefund(refund, item);
+    const processed = await this.processRefund(refund, item);
+    await this.notifyResult(processed);
+    return processed;
   }
 
   // BR-05: chua su dung, trong 7 ngay ke tu ngay mua, con it nhat 3 ngay truoc han su dung
@@ -121,7 +142,7 @@ export class RefundService {
 
   // Quan tri vien xac nhan hoan tien thu cong khi cong thanh toan khong kha dung - FR-REFUND-06
   async confirmManualRefund(id: string, actorUserId: string, gatewayRefundId: string) {
-    return this.dataSource.transaction(async manager => {
+    const result = await this.dataSource.transaction(async manager => {
       const refund = await manager.findOne(RefundRequest, { where: { id }, lock: { mode: 'pessimistic_write' } });
       if (!refund || refund.status !== RefundRequestStatus.MANUAL_PENDING) throw new BadRequestException('Yêu cầu không còn chờ hoàn thủ công.');
       const item = await manager.findOneOrFail(VoucherItem, { where: { id: refund.voucherItemId }, lock: { mode: 'pessimistic_write' } });
@@ -151,6 +172,9 @@ export class RefundService {
       await manager.save(AuditLog, manager.create(AuditLog, { actorUserId, action: 'CONFIRM_MANUAL_REFUND', entityType: 'RefundRequest', entityId: id, detail: { paymentRefundId: paymentRefund.id } }));
       return { message: 'Đã ghi nhận hoàn tiền thủ công.' };
     });
+    const refund = await this.refundRepo.findOne({ where: { id } });
+    if (refund) await this.notifyResult(refund);
+    return result;
   }
 
   findMyRequests(userId: string) {
