@@ -1,75 +1,89 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsBoolean, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateIf } from 'class-validator';
 
 export enum SortOption {
-  NEWEST = 'newest',
-  PRICE_ASC = 'price_asc',
-  PRICE_DESC = 'price_desc',
-  DISCOUNT_DESC = 'discount_desc',
-  BEST_SELLER = 'best_seller',
+  NEWEST = 'newest', PRICE_ASC = 'price_asc', PRICE_DESC = 'price_desc',
+  DISCOUNT_DESC = 'discount_desc', BEST_SELLER = 'best_seller', DISTANCE_ASC = 'distance_asc',
 }
-
-// FR-SEARCH-01..08
-export class SearchVoucherDto {
+export class LocationDto {
   @ApiPropertyOptional()
+  @ValidateIf(o => o.lat !== undefined || o.lng !== undefined)
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  lat?: number;
+
+  @ApiPropertyOptional()
+  @ValidateIf(o => o.lng !== undefined || o.lat !== undefined)
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  lng?: number;
+}
+export class SearchVoucherDto extends LocationDto {
   @IsOptional()
   @IsUUID()
   categoryId?: string;
 
-  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   keyword?: string;
 
-  @ApiPropertyOptional()
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsInt()
+  @Min(0)
   minPrice?: number;
 
-  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  maxPrice?: number;
+
+  @ApiPropertyOptional({ description: 'Mức giảm tối thiểu (%)' })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
-  maxPrice?: number;
+  @Min(0)
+  @Max(100)
+  minDiscount?: number;
 
-  @ApiPropertyOptional({ enum: SortOption })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  maxDiscount?: number;
+
   @IsOptional()
   @IsEnum(SortOption)
   sort?: SortOption;
 
-  // FR-SEARCH-05/06: "gan toi" - vi tri khach va ban kinh km (1/3/5/10)
-  @ApiPropertyOptional()
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
-  lat?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  lng?: number;
-
-  @ApiPropertyOptional({ enum: [1, 3, 5, 10] })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
+  @IsIn([1, 3, 5, 10])
   radiusKm?: number;
 
-  @ApiPropertyOptional({ default: 1 })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' ? true : value === 'false' ? false : value)
+  @IsBoolean()
+  locationDenied?: boolean;
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   page?: number;
 
-  // NFR-PERF-03: mac dinh 20 ban ghi/trang
-  @ApiPropertyOptional({ default: 20 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(100)
   pageSize?: number;
 }

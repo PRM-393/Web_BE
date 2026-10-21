@@ -1,7 +1,7 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, Param, Query, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { SearchService } from './search.service';
-import { SearchVoucherDto } from './dto/search-voucher.dto';
+import { LocationDto, SearchVoucherDto } from './dto/search-voucher.dto';
 
 @ApiTags('search')
 @Controller()
@@ -19,7 +19,7 @@ export class SearchController {
   }
 
   @Get('vouchers/:id')
-  detail(@Param('id') id: string) {
-    return this.searchService.detail(id);
+  detail(@Param('id', ParseUUIDPipe) id: string, @Query() location: LocationDto) {
+    return this.searchService.detail(id, location);
   }
 }

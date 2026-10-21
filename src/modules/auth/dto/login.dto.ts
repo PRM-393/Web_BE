@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, MinLength } from 'class-validator';
+import { IsEmail, MinLength, IsOptional, IsString, MaxLength } from 'class-validator';
 
 // FR-AUTH-06: BrandOwner, StoreStaff, Admin dang nhap bang email + mat khau
 export class LoginDto {
@@ -10,4 +10,8 @@ export class LoginDto {
   @ApiProperty()
   @MinLength(6)
   password: string;
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  deviceId?: string;
 }

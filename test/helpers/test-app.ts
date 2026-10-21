@@ -13,6 +13,8 @@ import { DataSource } from 'typeorm';
 import { AppModule } from '../../src/app.module';
 import { configureApp } from '../../src/app.setup';
 import * as entities from '../../src/entities';
+import { RefreshToken } from '../../src/entities/refresh-token.entity';
+import { MailService } from '../../src/modules/auth/mail.service';
 
 export const PASSWORD = 'Voucher@123';
 
@@ -51,18 +53,29 @@ async function createDataSource(): Promise<DataSource> {
   return ds.initialize();
 }
 
+export interface SentMail {
+  to: string;
+  subject: string;
+  text: string;
+}
+
 export interface TestApp {
   app: INestApplication;
   http: ReturnType<typeof request>;
   dataSource: DataSource;
+  // email OTP / kich hoat da "gui" (MailService duoc thay bang ban ghi nho)
+  emails: SentMail[];
   login(email: string): Promise<string>;
-  // Khach dang nhap bang OTP qua email; trong test ky thang access token cung dinh dang voi AuthService
-  customerToken(userId: string, email: string): string;
+  // Khach dang nhap bang OTP qua email; trong test tao phien (RefreshToken) va ky access token cung dinh dang voi AuthService
+  customerToken(userId: string, email: string): Promise<string>;
 }
 
 export async function createTestApp(): Promise<TestApp> {
   const dataSource = await createDataSource();
+  const emails: SentMail[] = [];
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(MailService)
+    .useValue({ send: async (to: string, subject: string, text: string) => void emails.push({ to, subject, text }) })
     .overrideProvider(getDataSourceToken())
     .useValue(dataSource)
     .compile();
@@ -74,13 +87,21 @@ export async function createTestApp(): Promise<TestApp> {
     app,
     http,
     dataSource,
+    emails,
     async login(email: string) {
       const res = await http.post('/api/auth/login').send({ email, password: PASSWORD }).expect(201);
       return res.body.data.accessToken as string;
     },
-    customerToken(userId: string, email: string) {
+    async customerToken(userId: string, email: string) {
+      // JwtStrategy kiem tra phien con hieu luc (FR-AUTH-10) nen phai co ban ghi RefreshToken
+      const session = await dataSource.getRepository(RefreshToken).save({
+        userId,
+        deviceId: 'e2e',
+        tokenHash: crypto.randomUUID(),
+        expiresAt: new Date(Date.now() + 86400000),
+      });
       return app.get(JwtService).sign(
-        { sub: userId, email, role: 'CUSTOMER' },
+        { sub: userId, sid: session.id, email, role: 'CUSTOMER', type: 'access' },
         { secret: process.env.JWT_ACCESS_SECRET || 'change_me_access_secret', expiresIn: '15m' },
       );
     },

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { RedeemService } from './redeem.service';
 import { RequestTokenDto, RedeemDto } from './dto/redeem.dto';
@@ -24,6 +24,9 @@ export class RedeemController {
   @Roles(Role.STORE_STAFF)
   @Post()
   redeem(@CurrentUser() user: CurrentUserPayload, @Body() dto: RedeemDto) {
+    if (!user.activeStoreId || user.activeStoreId !== dto.storeId) {
+      throw new BadRequestException('Vui lòng chọn chi nhánh làm việc trong phiên trước khi sử dụng voucher.');
+    }
     return this.redeemService.redeem(user.userId, dto);
   }
 

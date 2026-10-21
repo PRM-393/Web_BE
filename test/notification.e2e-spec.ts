@@ -20,7 +20,7 @@ describe('F16 - thong bao (e2e)', () => {
 
   async function newCustomer(name: string) {
     users[name] = await ds.getRepository(User).save({ email: `${name}@notify.local`, role: Role.CUSTOMER });
-    tokens[name] = t.customerToken(users[name].id, users[name].email);
+    tokens[name] = await t.customerToken(users[name].id, users[name].email);
   }
 
   async function newCampaign(title: string) {

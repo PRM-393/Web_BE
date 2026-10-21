@@ -20,7 +20,7 @@ describe('F09 - mua va thanh toan (e2e)', () => {
   // Tao khach hang moi va chien dich dang ban voi ton kho nho de kiem tra bien
   async function newCustomer(name: string) {
     const user = await ds.getRepository(User).save({ email: `${name}@test.local`, role: Role.CUSTOMER, fullName: name });
-    tokens[name] = t.customerToken(user.id, user.email);
+    tokens[name] = await t.customerToken(user.id, user.email);
     return user;
   }
 
@@ -233,7 +233,7 @@ describe('F09 - mua va thanh toan (e2e)', () => {
   });
 
   it('khach seed van mua duoc chien dich dang ban', async () => {
-    tokens.seed = t.customerToken(ID.customer, 'khach@voucher.local');
+    tokens.seed = await t.customerToken(ID.customer, 'khach@voucher.local');
     const body = await placeOrder('seed', ID.campPublished, 1);
     expect(body.data.order.status).toBe(OrderStatus.PENDING);
   });

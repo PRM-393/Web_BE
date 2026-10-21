@@ -4,6 +4,7 @@ import { EngageService } from './engage.service';
 import { CreateReviewDto } from './dto/create-review.dto';
 import { CreateFavoriteDto } from './dto/create-favorite.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { BrandResourceGuard } from '../../common/guards/brand-resource.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
@@ -11,7 +12,7 @@ import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current
 
 @ApiTags('engage')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, BrandResourceGuard)
 @Controller()
 export class EngageController {
   constructor(private readonly engageService: EngageService) {}
