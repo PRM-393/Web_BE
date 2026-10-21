@@ -1,3 +1,4 @@
+import { CategoryAdminController } from './category-admin.controller';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
@@ -9,7 +10,7 @@ import { SearchService } from './search.service';
 
 @Module({
   imports: [TypeOrmModule.forFeature([VoucherCampaign, Category, CampaignStore, Review])],
-  controllers: [SearchController],
+  controllers: [SearchController, CategoryAdminController],
   providers: [SearchService],
 })
 export class SearchModule {}

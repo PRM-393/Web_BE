@@ -156,9 +156,8 @@ export class AuthService {
         email: user.email, purpose: OtpPurpose.ACTIVATE, codeHash: hash(token),
         expiresAt: new Date(Date.now() + 24 * 3600000),
       }));
-      const url = new URL('/activate', process.env.WEB_APP_URL || 'http://localhost:5173');
-      url.searchParams.set('email', user.email);
-      url.searchParams.set('token', token);
+      const url = new URL('/#/activate', process.env.WEB_APP_URL || 'http://localhost:5173');
+      url.hash = '/activate?' + new URLSearchParams({ email: user.email, token }).toString();
       await this.mail.send(user.email, 'Kích hoạt tài khoản Voucher Platform', 'Đặt mật khẩu tại ' + url.toString() + ' . Liên kết chỉ dùng một lần và có hiệu lực 24 giờ.');
     });
     return { message: 'Nếu tài khoản cần kích hoạt, email sẽ được gửi.' };
@@ -182,6 +181,39 @@ export class AuthService {
       await manager.save(record);
     });
     return { message: 'Đã kích hoạt tài khoản. Bạn có thể đăng nhập.' };
+  }
+
+  // FR-AUTH-09/10: one-use reset link, 24h, revoke every session on success.
+  async requestPasswordReset(email: string) {
+    const message = 'Nếu tài khoản phù hợp, hướng dẫn đặt lại mật khẩu sẽ được gửi.';
+    await this.dataSource.transaction(async manager => {
+      const user = await manager.findOne(User, { where: { email: normalize(email) }, lock: { mode: 'pessimistic_write' } });
+      if (!user || user.role === Role.CUSTOMER || user.status !== UserStatus.ACTIVE) return;
+      const recent = await manager.count(OtpCode, { where: { email: user.email, purpose: OtpPurpose.RESET_PASSWORD, createdAt: MoreThan(new Date(Date.now() - 3600000)) } });
+      if (recent >= 5) return;
+      await manager.update(OtpCode, { email: user.email, purpose: OtpPurpose.RESET_PASSWORD, usedAt: IsNull() }, { usedAt: new Date() });
+      const token = randomBytes(32).toString('hex');
+      await manager.save(OtpCode, manager.create(OtpCode, { email: user.email, purpose: OtpPurpose.RESET_PASSWORD, codeHash: hash(token), expiresAt: new Date(Date.now() + 24 * 3600000) }));
+      const url = new URL(process.env.WEB_APP_URL || 'http://localhost:5173');
+      url.hash = '/reset-password?' + new URLSearchParams({ email: user.email, token }).toString();
+      await this.mail.send(user.email, 'Đặt lại mật khẩu Voucher Platform', 'Đặt lại mật khẩu tại ' + url.toString() + ' . Liên kết dùng một lần trong 24 giờ.');
+    });
+    return { message };
+  }
+
+  async resetPassword(email: string, token: string, password: string) {
+    await this.dataSource.transaction(async manager => {
+      const user = await manager.findOne(User, { where: { email: normalize(email), status: UserStatus.ACTIVE }, lock: { mode: 'pessimistic_write' } });
+      if (!user || user.role === Role.CUSTOMER) throw new BadRequestException('Liên kết không hợp lệ hoặc đã hết hạn.');
+      const record = await manager.findOne(OtpCode, { where: { email: user.email, purpose: OtpPurpose.RESET_PASSWORD, codeHash: hash(token), usedAt: IsNull(), expiresAt: MoreThan(new Date()) } });
+      if (!record) throw new BadRequestException('Liên kết không hợp lệ hoặc đã hết hạn.');
+      user.passwordHash = await bcrypt.hash(password, 12);
+      record.usedAt = new Date();
+      await manager.save(user);
+      await manager.save(record);
+      await manager.update(RefreshToken, { userId: user.id, revokedAt: IsNull() }, { revokedAt: new Date() });
+    });
+    return { message: 'Đã đổi mật khẩu. Vui lòng đăng nhập lại trên các thiết bị.' };
   }
 
   private async issueTokens(user: User, deviceId: string | undefined, manager: EntityManager, previous?: RefreshToken) {
