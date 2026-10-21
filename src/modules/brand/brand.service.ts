@@ -1,6 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
+import { AuthService } from '../auth/auth.service';
+import { RefreshToken } from '../../entities/refresh-token.entity';
 import { Brand } from '../../entities/brand.entity';
 import { Store } from '../../entities/store.entity';
 import { StaffAssignment } from '../../entities/staff-assignment.entity';
@@ -19,6 +21,8 @@ export class BrandService {
     @InjectRepository(StaffAssignment)
     private readonly staffRepo: Repository<StaffAssignment>,
     @InjectRepository(User) private readonly userRepo: Repository<User>,
+    @InjectRepository(RefreshToken) private readonly sessionRepo: Repository<RefreshToken>,
+    private readonly authService: AuthService,
   ) {}
 
   // FR-BRAND-01/02: ho so moi o trang thai cho duyet
@@ -83,12 +87,20 @@ export class BrandService {
       });
       await this.userRepo.save(user);
     }
+    if (user.role !== Role.STORE_STAFF) throw new BadRequestException('Email đã thuộc tài khoản có vai trò khác.');
+    const existing = await this.staffRepo.find({ where: { userId: user.id }, relations: ['store'] });
+    const targetStore = await this.storeRepo.findOneByOrFail({ id: dto.storeId });
+    if (existing.some(a => a.store.brandId !== targetStore.brandId)) {
+      throw new BadRequestException('Nhân viên đã thuộc thương hiệu khác.');
+    }
     const assignment = this.staffRepo.create({
       userId: user.id,
       storeId: dto.storeId,
       active: true,
     });
-    return this.staffRepo.save(assignment);
+    const saved = await this.staffRepo.save(assignment);
+    if (user.status === UserStatus.PENDING_ACTIVATION) await this.authService.sendActivation(user.email);
+    return saved;
   }
 
   // FR-BRAND-05: danh sach nhan vien theo cac chi nhanh cua thuong hieu (chi tra thong tin can hien thi)
@@ -109,9 +121,13 @@ export class BrandService {
     }));
   }
 
-  // FR-BRAND-06: vo hieu hoa tai khoan nhan vien da nghi viec - TODO: thu hoi refresh token
+  // FR-BRAND-06: disable the account and revoke every device session.
   async deactivateStaff(assignmentId: string) {
-    await this.staffRepo.update(assignmentId, { active: false });
+    const assignment = await this.staffRepo.findOne({ where: { id: assignmentId } });
+    if (!assignment) throw new NotFoundException('Không tìm thấy nhân viên.');
+    await this.staffRepo.update({ userId: assignment.userId }, { active: false });
+    await this.userRepo.update(assignment.userId, { status: UserStatus.INACTIVE });
+    await this.sessionRepo.update({ userId: assignment.userId, revokedAt: IsNull() }, { revokedAt: new Date() });
     return { message: 'Da vo hieu hoa nhan vien.' };
   }
 }

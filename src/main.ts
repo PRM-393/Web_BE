@@ -1,28 +1,13 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
-import { AllExceptionsFilter } from './common/filters/http-exception.filter';
-import { corsOrigin } from './config/cors';
+import { configureApp } from './app.setup';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  configureApp(app);
   const apiPrefix = process.env.API_PREFIX || 'api';
-  app.setGlobalPrefix(apiPrefix);
-
-  app.enableCors({ origin: corsOrigin(), credentials: true });
-
-  // Validation toan cuc theo DTO (class-validator) - NFR-MNT
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      transform: true,
-      forbidNonWhitelisted: true,
-    }),
-  );
-
-  app.useGlobalFilters(new AllExceptionsFilter());
 
   // Swagger tu sinh tai liệu API - NFR-MNT-03
   const swaggerConfig = new DocumentBuilder()

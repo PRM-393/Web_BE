@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ConfirmRefundDto } from '../report/dto/confirm-refund.dto';
 import { RefundService } from './refund.service';
 import { CreateRefundDto } from './dto/create-refund.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -35,7 +36,7 @@ export class RefundController {
 
   @Roles(Role.ADMIN)
   @Patch(':id/confirm-manual')
-  confirmManual(@Param('id') id: string) {
-    return this.refundService.confirmManualRefund(id);
+  confirmManual(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload, @Body() dto: ConfirmRefundDto) {
+    return this.refundService.confirmManualRefund(id, user.userId, dto.gatewayRefundId);
   }
 }

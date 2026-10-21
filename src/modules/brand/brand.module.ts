@@ -5,10 +5,12 @@ import { Store } from '../../entities/store.entity';
 import { StaffAssignment } from '../../entities/staff-assignment.entity';
 import { User } from '../../entities/user.entity';
 import { BrandController } from './brand.controller';
+import { AuthModule } from '../auth/auth.module';
+import { RefreshToken } from '../../entities/refresh-token.entity';
 import { BrandService } from './brand.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Brand, Store, StaffAssignment, User])],
+  imports: [AuthModule, TypeOrmModule.forFeature([Brand, Store, StaffAssignment, User, RefreshToken])],
   controllers: [BrandController],
   providers: [BrandService],
   exports: [BrandService],

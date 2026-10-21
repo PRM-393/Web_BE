@@ -1,5 +1,9 @@
 import { Body, Controller, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ActivateDto, ActivationRequestDto, SelectStoreDto } from './dto/session.dto';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Role } from '../../common/enums/role.enum';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
@@ -43,6 +47,19 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @Post('logout')
   logout(@CurrentUser() user: CurrentUserPayload) {
-    return this.authService.logout(user.userId);
+    return this.authService.logout(user.userId, user.sessionId);
+  }
+  @Post('activation/request')
+  requestActivation(@Body() dto: ActivationRequestDto) { return this.authService.sendActivation(dto.email); }
+
+  @Post('activate')
+  activate(@Body() dto: ActivateDto) { return this.authService.activate(dto.email, dto.token, dto.password); }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.STORE_STAFF)
+  @Post('select-store')
+  selectStore(@CurrentUser() user: CurrentUserPayload, @Body() dto: SelectStoreDto) {
+    return this.authService.selectStore(user.userId, user.sessionId, dto.storeId);
   }
 }

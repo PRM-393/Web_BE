@@ -114,6 +114,41 @@ src/
 - **CORS**: `CORS_ORIGIN` mac dinh `http://localhost:5173`, khop lenh chay Flutter Web
   `flutter run -d chrome --web-port 5173` cua repo Web_FE. App di dong khong bi CORS.
 
+## Thanh toan payOS (F09)
+
+- Tao don: `POST /api/orders` -> giu cho 15 phut, tra `paymentUrl` (link payOS het han cung luc giu cho).
+- Ket qua thanh toan chi duoc cong nhan qua webhook co chu ky: `POST /api/orders/payos-webhook`
+  (khai bao URL nay o my.payos.vn -> Kenh thanh toan -> Webhook). App hoi trang thai bang `GET /api/orders/:id`.
+- Thanh toan lai trong 15 phut: `POST /api/orders/:id/pay` (tra lai dung link cu).
+- Chua co khoa payOS: `paymentUrl` = null; bat `PAYMENT_SIMULATOR=true` va goi `POST /api/orders/:id/simulate-payment`
+  (body `{ "success": false }` de thu nhanh that bai). Nho tat o ban that.
+- Job 5 phut huy don qua han; webhook den muon, lech tien, giao dich thua deu duoc xu ly va ghi `audit_logs`.
+
+## Thong bao (F16) - cach goi tu tinh nang khac
+
+Inject `NotificationService` (module global, khong can import) roi goi su kien co san; ham khong bao gio nem loi:
+
+```ts
+await this.notifications.voucherUsed(userId, voucherItemId, campaignTitle, storeName);   // F11 sau khi redeem thanh cong
+await this.notifications.refundResult(userId, refundId, status, message);               // F12 khi co ket qua hoan tien
+await this.notifications.campaignPublished(campaign, brandName);                       // F08 khi chien dich chuyen PUBLISHED
+await this.notifications.notify(userId, NotificationType.X, { title, body, data, dedupeKey }); // truong hop khac
+```
+
+- Goi SAU khi transaction da commit. `dedupeKey` chong gui trung; khach tat nhom thong bao thi tu bo qua.
+- Push FCM chay khi co `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`; khong co thi chi luu trong app.
+- Job 9:00 (gio VN) nhac voucher het han sau 7 ngay va 1 ngay.
+
+## Dinh dang phan hoi (F01)
+
+Moi API tra ve `{ data, error, meta }` (`src/common/interceptors/response-envelope.interceptor.ts`):
+
+- Thanh cong: `{ "data": <noi dung>, "error": null, "meta": null }`. Danh sach phan trang tra `{ items, total, page, pageSize }` trong `data`,
+  `meta` tu dien `{ page, pageSize, total, totalPages }`. Mac dinh 20 / trang, toi da 100 (`src/common/dto/pagination.dto.ts`).
+- Loi: `{ "data": null, "error": { "code", "message", "path", "timestamp" }, "meta": null }`; `message` la chuoi tieng Viet hien thang cho nguoi dung.
+- Endpoint phai tra dung dinh dang ben thu ba (IPN cong thanh toan) danh dau `@RawResponse()`.
+- Endpoint moi chi can `return` du lieu; khong tu boc `{ data }` trong controller.
+
 ## Endpoint bo sung cho client Flutter
 
 | Endpoint | Vai tro | Muc dich |
@@ -128,12 +163,11 @@ src/
 ## Bien moi truong quan trong
 
 Xem `.env.example` day du. Cac nhom chinh: `DB_*` (PostgreSQL), `JWT_*`, `OTP_*`,
-`PAYMENT_GATEWAY_*` (sandbox), `SMTP_*`, `FIREBASE_*`, `REDEEM_TOKEN_TTL_SECONDS`,
+`PAYOS_*` + `PAYMENT_SIMULATOR` (cong thanh toan), `SMTP_*`, `FIREBASE_*`, `REDEEM_TOKEN_TTL_SECONDS`,
 `ORDER_RESERVATION_TTL_MINUTES`, `REFUND_WINDOW_DAYS`, `DEFAULT_COMMISSION_RATE`.
 
 ## Cac TODO nghiep vu chinh con lai (xem comment trong code)
 
-- Xac thuc chu ky HMAC webhook thanh toan that su (BR-18) — `order.service.ts`.
 - Goi API hoan tien that cua cong sandbox + fallback thu cong (ASM-02) — `refund.service.ts`.
 - Tinh khoang cach "gan toi" (Haversine) trong `search.service.ts` (FR-SEARCH-05/06).
 - Gui email OTP that qua SMTP, gui push qua Firebase Admin SDK.
@@ -148,3 +182,17 @@ Xem `.env.example` day du. Cac nhom chinh: `DB_*` (PostgreSQL), `JWT_*`, `OTP_*`
   approve/reject chi tu PENDING, sua sau khi duyet dua ve PENDING (BR-17).
 - Khoa nhap OTP redeem 15 phut sau 5 lan sai (FR-REDEEM-12); danh dau nonce da dung ca khi khong hop le (FR-REDEEM-13).
 - Chan vo hieu hoa chi nhanh ap dung cuoi cung cua chien dich con voucher ACTIVE (BR-24).
+
+## F02 F03 F04 F05 F14 implementation notes
+
+- Run `npm ci`, `npm run build`, `npm test -- --runInBand`, and `npm run test:e2e`.
+- SMTP is required for OTP/activation: configure SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASSWORD, SMTP_FROM and WEB_APP_URL in your environment. Tests replace MailService; they never send real email.
+- Existing sessions must sign in again after this update. Access tokens now reference a database session; refresh tokens rotate and only their SHA-256 hashes are stored.
+- Staff: GET /api/redeem/my-stores, then POST /api/auth/select-store with storeId before POST /api/redeem. The server enforces the store associated with the session.
+- Activation: POST /api/auth/activation/request with email, then POST /api/auth/activate with email, token and password. Tokens last 24 hours and are single-use.
+- Search: GET /api/vouchers supports categoryId, keyword (campaign/brand name), minPrice/maxPrice, minDiscount/maxDiscount (percent), sort, lat/lng, radiusKm (1/3/5/10), locationDenied, page and pageSize (up to 100). distance_asc sorts by the nearest active applicable store. Location filters are evaluated before pagination.
+- GET /api/vouchers/:id accepts lat/lng and returns active applicable stores, availableQuantity, canPurchase, refundPolicy and up to 20 visible reviews plus full review count/average. Only PUBLISHED/SOLD_OUT campaigns in their sale window are public; brand bank details are omitted.
+- Reports: GET /api/brands/:brandId/report supports campaignId, storeId, from and to. Only the brand owner can read it. Sales cohorts are filtered by Order.paidAt; store filters refer to the redemption location, since purchases do not have a store. Date-only inputs cover whole Vietnam calendar days. Revenue subtracts completed voucher refunds; usage rate uses sold vouchers excluding refunded vouchers.
+- GET /api/admin/dashboard returns transactionsByDay in Vietnam time and commission at the rates captured on paid orders, excluding refunded vouchers.
+- Queues: GET /api/refunds/manual-pending and GET /api/admin/payment-mismatches. After completing a refund outside the system, PATCH /api/refunds/:id/confirm-manual or PATCH /api/admin/payment-mismatches/:id/confirm-refund with gatewayRefundId. These actions record an existing external refund; they do not transfer money. Confirmations lock records, record PaymentRefund and AuditLog, and reject repeats.
+- No database schema migration is needed: this update uses existing session, OTP, refund and audit tables. Unit/e2e tests run against pg-mem; validate database locking and delivery with PostgreSQL/MySQL and configured SMTP before deployment.

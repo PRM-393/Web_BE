@@ -6,11 +6,12 @@ import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
 import { VoucherItem } from '../../entities/voucher-item.entity';
 import { OrderController } from './order.controller';
 import { OrderService } from './order.service';
+import { OrderScheduler } from './order.scheduler';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Order, Payment, VoucherCampaign, VoucherItem])],
   controllers: [OrderController],
-  providers: [OrderService],
+  providers: [OrderService, OrderScheduler],
   exports: [OrderService],
 })
 export class OrderModule {}

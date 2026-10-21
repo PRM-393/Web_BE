@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsNumber, IsObject, IsString } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsObject, IsOptional, IsString } from 'class-validator';
 
 // IPN/Webhook cong thanh toan - FR-ORDER-04/05/06, NFR-SEC-... HMAC signature xac thuc o service
 export class PaymentWebhookDto {
@@ -26,6 +26,7 @@ export class PaymentWebhookDto {
   signature: string;
 
   @ApiProperty({ required: false })
+  @IsOptional()
   @IsObject()
   raw?: Record<string, unknown>;
 }
