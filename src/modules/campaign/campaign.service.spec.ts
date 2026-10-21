@@ -43,12 +43,56 @@ function campaignOf(overrides: Partial<VoucherCampaign> = {}): VoucherCampaign {
   } as VoucherCampaign;
 }
 
+// T4: job chuyen trang thai sinh cau UPDATE ... WHERE. O unit test chi ghi lai cau lenh sinh ra
+// (dung from/to, chi ghi cot status, dung dieu kien); hanh vi that tren SQL duoc phu o
+// test/campaign-job.e2e-spec.ts bang PostgreSQL gia lap.
+interface RecordedUpdate {
+  from: CampaignStatus[];
+  to: CampaignStatus;
+  set: Record<string, unknown>;
+  where: string[];
+  params: Record<string, unknown>;
+}
+
+function recordingQueryBuilder(log: RecordedUpdate[]) {
+  const entry: RecordedUpdate = { from: [], to: CampaignStatus.DRAFT, set: {}, where: [], params: {} };
+  const collect = (clause: string, params?: Record<string, unknown>) => {
+    entry.where.push(clause);
+    Object.assign(entry.params, params ?? {});
+    if (params?.from) entry.from = params.from as CampaignStatus[];
+  };
+  const qb = {
+    update: () => qb,
+    set: (values: Record<string, unknown>) => {
+      entry.set = values;
+      entry.to = values.status as CampaignStatus;
+      return qb;
+    },
+    where: (clause: string, params?: Record<string, unknown>) => (collect(clause, params), qb),
+    andWhere: (clause: string, params?: Record<string, unknown>) => (collect(clause, params), qb),
+    setParameter: (key: string, value: unknown) => {
+      entry.params[key] = value;
+      return qb;
+    },
+    // affected khac nhau tung buoc de kiem duoc service gan dung so vao dung ten
+    execute: async () => {
+      log.push(entry);
+      return { affected: log.length };
+    },
+  };
+  return qb;
+}
+
 function buildService(campaign: VoucherCampaign | null, brand?: Partial<Brand> | null) {
+  const updates: RecordedUpdate[] = [];
   const campaignRepo = {
     findOne: jest.fn().mockResolvedValue(campaign),
     save: jest.fn((entity) => Promise.resolve(entity)),
     create: jest.fn((entity) => entity),
     find: jest.fn().mockResolvedValue([]),
+    // PostgreSQL boc ten cot bang dau nhay kep, MySQL bang dau huyen - o test dung kieu PostgreSQL
+    manager: { connection: { driver: { escape: (name: string) => `"${name}"` } } },
+    createQueryBuilder: jest.fn(() => recordingQueryBuilder(updates)),
   } as unknown as Repository<VoucherCampaign>;
 
   const campaignStoreRepo = {
@@ -60,7 +104,7 @@ function buildService(campaign: VoucherCampaign | null, brand?: Partial<Brand> |
     findOne: jest.fn().mockResolvedValue(brand === undefined ? { id: 'brand-1', status: BrandStatus.APPROVED } : brand),
   } as unknown as Repository<Brand>;
 
-  return { service: new CampaignService(campaignRepo, campaignStoreRepo, brandRepo), campaignRepo, brandRepo };
+  return { service: new CampaignService(campaignRepo, campaignStoreRepo, brandRepo), campaignRepo, brandRepo, updates };
 }
 
 describe('BR-21 / DC-10 / FR-CAMP-13 - rang buoc moc thoi gian', () => {
@@ -272,5 +316,90 @@ describe('FR-CAMP-08 - tam dung va mo lai', () => {
     const { service } = buildService(campaignOf({ status: CampaignStatus.PAUSED }));
     const result = await service.resume('camp-1');
     expect(result.status).toBe(CampaignStatus.PUBLISHED);
+  });
+});
+
+// T4 - FR-CAMP-10: tac vu nen 5 phut mot luot chuyen trang thai chien dich
+describe('FR-CAMP-10 - tac vu nen chuyen trang thai chien dich', () => {
+  const S = CampaignStatus;
+  const runAt = new Date('2026-10-21T03:00:00.000Z');
+
+  async function runJob() {
+    const { service, updates } = buildService(campaignOf({ status: S.APPROVED }));
+    const result = await service.runStatusTransitions(runAt);
+    return { updates, result };
+  }
+
+  const clauses = (update: RecordedUpdate) => update.where.join(' ');
+
+  it('mot luot gom dung 4 buoc, theo dung thu tu cua FR-CAMP-10', async () => {
+    const { updates } = await runJob();
+    expect(updates.map((u) => [u.from, u.to])).toEqual([
+      [[S.APPROVED], S.PUBLISHED],
+      [[S.PUBLISHED], S.SOLD_OUT],
+      [[S.SOLD_OUT], S.PUBLISHED],
+      [[S.PUBLISHED, S.PAUSED, S.SOLD_OUT], S.ENDED],
+    ]);
+  });
+
+  it('chi ghi cot status, khong dung vao soldQuantity / reservedQuantity cua F09 va F12', async () => {
+    const { updates } = await runJob();
+    for (const update of updates) {
+      expect(Object.keys(update.set)).toEqual(['status']);
+    }
+  });
+
+  it('phat hanh khi da toi ngay bat dau ban va van con thoi gian ban (FR-CAMP-07, BR-08)', async () => {
+    const { updates } = await runJob();
+    expect(clauses(updates[0])).toContain('"saleStartAt" <= :now');
+    expect(clauses(updates[0])).toContain('"saleEndAt" > :now');
+    expect(updates[0].params.now).toBe(runAt);
+  });
+
+  it('het hang va co hang lai xet theo ton kho kha dung total - sold - reserved (DC-03)', async () => {
+    const { updates } = await runJob();
+    const available = '"totalQuantity" - "soldQuantity" - "reservedQuantity"';
+    expect(clauses(updates[1])).toContain(`${available} <= 0`);
+    expect(clauses(updates[2])).toContain(`${available} > 0`);
+    // Het thoi gian ban thi phai ket thuc chu khong phai danh dau het hang
+    expect(clauses(updates[1])).toContain('"saleEndAt" > :now');
+    expect(clauses(updates[2])).toContain('"saleEndAt" > :now');
+  });
+
+  it('chien dich tam dung chi bi dong vao khi het thoi gian ban (FR-CAMP-08)', async () => {
+    const { updates } = await runJob();
+    const touchingPaused = updates.filter((u) => u.from.includes(S.PAUSED));
+    expect(touchingPaused.map((u) => u.to)).toEqual([S.ENDED]);
+  });
+
+  it('ket thuc ban khong dong vao chien dich chua phat hanh', async () => {
+    const { updates } = await runJob();
+    const ending = updates[3];
+    expect(ending.from).not.toContain(S.DRAFT);
+    expect(ending.from).not.toContain(S.PENDING);
+    // APPROVED lo mat cua so ban van sua lai duoc (FR-CAMP-15), ENDED thi het duong quay lai
+    expect(ending.from).not.toContain(S.APPROVED);
+    expect(clauses(ending)).toContain('"saleEndAt" <= :now');
+  });
+
+  it('chay theo luot thi ra soat toan bo chien dich, khong gioi han theo id', async () => {
+    const { updates } = await runJob();
+    for (const update of updates) {
+      expect(update.params.campaignId).toBeUndefined();
+    }
+  });
+
+  it('tra ve so chien dich da doi o tung buoc de ghi nhat ky', async () => {
+    const { result } = await runJob();
+    expect(result).toEqual({ published: 1, soldOut: 2, restocked: 3, ended: 4 });
+  });
+
+  it('duyet xong thi ra soat ngay chien dich vua duyet, khong doi het luot 5 phut (FR-CAMP-07)', async () => {
+    const { service, updates } = buildService(campaignOf({ status: S.PENDING, saleStartAt: day(-1) }));
+    await service.approve('camp-1', 'admin-1');
+    expect(updates).toHaveLength(4);
+    for (const update of updates) {
+      expect(update.params.campaignId).toBe('camp-1');
+    }
   });
 });

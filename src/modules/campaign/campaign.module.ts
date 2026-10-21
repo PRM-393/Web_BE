@@ -6,11 +6,13 @@ import { CampaignStore } from '../../entities/campaign-store.entity';
 import { Brand } from '../../entities/brand.entity';
 import { CampaignController } from './campaign.controller';
 import { CampaignService } from './campaign.service';
+// FR-CAMP-10: tac vu nen chuyen trang thai chien dich
+import { CampaignScheduler } from './campaign.scheduler';
 
 @Module({
   imports: [TypeOrmModule.forFeature([VoucherCampaign, CampaignStore, Brand])],
   controllers: [CampaignController],
-  providers: [CampaignService],
+  providers: [CampaignService, CampaignScheduler],
   exports: [CampaignService],
 })
 export class CampaignModule {}
