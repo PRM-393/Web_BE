@@ -427,14 +427,16 @@ describe('Web_BE e2e (pg-mem)', () => {
     await http.post('/api/admin/categories').set(auth('staff')).send({ name: 'Denied' }).expect(403);
     await http.post('/api/admin/categories').set(auth('admin')).send({ name: '   ' }).expect(400);
     const created = await http.post('/api/admin/categories').set(auth('admin')).send({ name: 'Test category', displayOrder: 99 }).expect(201);
-    await http.patch('/api/admin/categories/' + created.body.id).set(auth('admin')).send({ name: 'Updated category' }).expect(200);
+    // main wraps successful responses in { data }; keep this test valid before and after that middleware is merged.
+    const createdCategory = created.body.data ?? created.body;
+    await http.patch('/api/admin/categories/' + createdCategory.id).set(auth('admin')).send({ name: 'Updated category' }).expect(200);
     const campaign = await ds.getRepository(VoucherCampaign).findOneByOrFail({ id: ID.campPublished });
     const previous = campaign.categoryId;
-    await ds.getRepository(VoucherCampaign).update(campaign.id, { categoryId: created.body.id });
-    await http.delete('/api/admin/categories/' + created.body.id).set(auth('admin')).expect(400);
+    await ds.getRepository(VoucherCampaign).update(campaign.id, { categoryId: createdCategory.id });
+    await http.delete('/api/admin/categories/' + createdCategory.id).set(auth('admin')).expect(400);
     await ds.getRepository(VoucherCampaign).update(campaign.id, { categoryId: previous });
-    await http.delete('/api/admin/categories/' + created.body.id).set(auth('admin')).expect(200);
-    await http.delete('/api/admin/categories/' + created.body.id).set(auth('admin')).expect(404);
+    await http.delete('/api/admin/categories/' + createdCategory.id).set(auth('admin')).expect(200);
+    await http.delete('/api/admin/categories/' + createdCategory.id).set(auth('admin')).expect(404);
   });
 
   it('FR-AUTH-09 reset link is one-use, rejects wrong tokens and revokes all old sessions', async () => {
@@ -442,6 +444,7 @@ describe('Web_BE e2e (pg-mem)', () => {
     const template = await ds.getRepository(User).findOneByOrFail({ email: 'owner@highlands.local' });
     const user = await ds.getRepository(User).save(ds.getRepository(User).create({ email: 'reset-test@example.test', role: template.role, status: UserStatus.ACTIVE, passwordHash: await bcrypt.hash(PASSWORD, 4) }));
     const initial = await http.post('/api/auth/login').send({ email: user.email, password: PASSWORD, deviceId: 'stable-device-test' }).expect(201);
+    const initialTokens = initial.body.data ?? initial.body;
     await http.post('/api/auth/password-reset/request').send({ email: user.email }).expect(201);
     const url = new URL(emails[emails.length - 1].text.match(/https?:\/\/\S+/)![0]);
     const params = new URLSearchParams(url.hash.split('?')[1]);
@@ -449,8 +452,8 @@ describe('Web_BE e2e (pg-mem)', () => {
     await http.post('/api/auth/password-reset/confirm').send({ ...body, token: '0'.repeat(64) }).expect(400);
     await http.post('/api/auth/password-reset/confirm').send(body).expect(201);
     await http.post('/api/auth/password-reset/confirm').send(body).expect(400);
-    await http.post('/api/auth/refresh').send({ refreshToken: initial.body.refreshToken }).expect(401);
-    await http.get('/api/brands/me').set({ Authorization: 'Bearer ' + initial.body.accessToken }).expect(401);
+    await http.post('/api/auth/refresh').send({ refreshToken: initialTokens.refreshToken }).expect(401);
+    await http.get('/api/brands/me').set({ Authorization: 'Bearer ' + initialTokens.accessToken }).expect(401);
     await http.post('/api/auth/login').send({ email: user.email, password: body.password }).expect(201);
   });
 
