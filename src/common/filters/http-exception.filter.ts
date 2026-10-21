@@ -6,6 +6,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { BusinessException } from '../exceptions/business.exception';
 
 // Chuan hoa loi tra ve theo dinh dang { data, error, meta } (F01), khong ro ri thong tin ky thuat - NFR-USA-02.
 // error.message luon la chuoi de hien thang cho nguoi dung; loi validation nhieu dong duoc noi bang xuong dong.
@@ -31,6 +32,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
       error: {
         code: status,
         message,
+        // Loi nghiep vu (BusinessException): ma ly do + du lieu kem theo cho client hien chi tiet
+        ...(exception instanceof BusinessException
+          ? { reason: exception.reason, details: exception.details }
+          : {}),
         path: request.url,
         timestamp: new Date().toISOString(),
       },

@@ -7,7 +7,15 @@ import { Observable, map } from 'rxjs';
 //  - Loi: data = null, error = { code, message, path, timestamp } (xem AllExceptionsFilter).
 export interface ApiEnvelope<T = unknown> {
   data: T | null;
-  error: { code: number; message: string; path: string; timestamp: string } | null;
+  error: {
+    code: number;
+    message: string;
+    // chi co voi loi nghiep vu (BusinessException)
+    reason?: string;
+    details?: Record<string, unknown> | null;
+    path: string;
+    timestamp: string;
+  } | null;
   meta: PageMeta | null;
 }
 

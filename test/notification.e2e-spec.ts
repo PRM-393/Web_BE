@@ -81,6 +81,47 @@ describe('F16 - thong bao (e2e)', () => {
     expect(body.meta).toMatchObject({ page: 1, pageSize: 20, total: 1 });
   });
 
+  it('cua hang redeem xong khach nhan thong bao "da su dung" kem ten chi nhanh (FR-REDEEM-09)', async () => {
+    await newCustomer('lan');
+    const c = await newCampaign('Tra sua size L');
+    await buyAndPay('lan', c.id);
+    const item = await ds.getRepository(VoucherItem).findOneByOrFail({ userId: users.lan.id });
+    const token = await t.http.post('/api/redeem/token').set(auth('lan')).send({ voucherItemId: item.id }).expect(201);
+
+    tokens.staff = await t.login('staff@highlands.local');
+    await t.http.post('/api/auth/select-store').set(auth('staff')).send({ storeId: ID.store1 }).expect(201);
+    await t.http
+      .post('/api/redeem')
+      .set(auth('staff'))
+      // BR-03: voucher menh gia (PREPAID) bat buoc nhap gia tri hoa don
+      .send({ storeId: ID.store1, otpCode: token.body.data.otpCode, billAmount: 120000 })
+      .expect(201);
+
+    const used = (await myNotifications('lan')).data.items.find((n: { type: string }) => n.type === 'VOUCHER_USED');
+    expect(used).toMatchObject({ title: 'Đã sử dụng voucher', data: { voucherItemId: item.id } });
+    expect(used.body).toContain('Tra sua size L');
+    expect(used.body).toContain('Highlands');
+  });
+
+  it('hoan tien xong khach nhan thong bao ket qua (FR-REFUND-09)', async () => {
+    await newCustomer('minh');
+    const c = await newCampaign('Banh mi');
+    await buyAndPay('minh', c.id);
+    const item = await ds.getRepository(VoucherItem).findOneByOrFail({ userId: users.minh.id });
+    const refund = await t.http.post('/api/refunds').set(auth('minh')).send({ voucherItemId: item.id, reason: 'doi y' }).expect(201);
+    expect(refund.body.data.status).toBe('COMPLETED');
+
+    const result = (await myNotifications('minh')).data.items.find((n: { type: string }) => n.type === 'REFUND_RESULT');
+    expect(result).toMatchObject({ title: 'Kết quả hoàn tiền', data: { refundId: refund.body.data.id, status: 'COMPLETED' } });
+
+    // voucher da hoan khong hoan lai duoc: bao tu choi
+    const again = await t.http.post('/api/refunds').set(auth('minh')).send({ voucherItemId: item.id }).expect(201);
+    expect(again.body.data.status).toBe('REJECTED');
+    const rejected = (await myNotifications('minh')).data.items.filter((n: { type: string }) => n.type === 'REFUND_RESULT');
+    expect(rejected).toHaveLength(2);
+    expect(rejected[0].body).toContain('từ chối');
+  });
+
   it('danh dau da doc tung thong bao va tat ca', async () => {
     await newCustomer('rin');
     const c = await newCampaign('Tra sua');

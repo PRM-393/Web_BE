@@ -153,12 +153,48 @@ Moi API tra ve `{ data, error, meta }` (`src/common/interceptors/response-envelo
 
 | Endpoint | Vai tro | Muc dich |
 |---|---|---|
-| `GET /wallet` | CUSTOMER | Vi voucher cua khach (khong tra secretKey) |
+| `GET /wallet` | CUSTOMER | Vi voucher cua khach (xem muc F10 - F15 ben duoi) |
 | `GET /redeem/my-stores` | STORE_STAFF | Chi nhanh dang duoc gan de chon chi nhanh lam viec (FR-AUTH-12) |
 | `GET /brands/:id/staff` | BRAND_OWNER | Danh sach nhan vien theo chi nhanh (FR-BRAND-05) |
 | `GET /admin/commission-rate` | ADMIN | Ty le hoa hong hien tai (FR-SETTLE-01) |
 | `GET /admin/settlements` | ADMIN | Tat ca phieu doi soat kem ten thuong hieu (FR-SETTLE-07) |
 | `GET /refunds/manual-pending` | ADMIN | Yeu cau cho hoan tien thu cong (FR-REFUND-06) |
+
+## F10 - F15: vi, ma redeem, xac nhan su dung, hoan tien, danh gia
+
+Loi nghiep vu tra them `error.reason` (ma ly do) va `error.details` de app / web hien thong bao cu the
+(`BusinessException`, mo rong dinh dang F01, client cu van doc `error.message` nhu truoc).
+
+| Endpoint | Vai tro | Ghi chu |
+|---|---|---|
+| `GET /wallet?tab=ACTIVE\|USED\|EXPIRED\|REFUNDED` | CUSTOMER | Moi voucher co `tab`, `displayStatus`, `statusLabel`, `canRedeem`, `refund { canRefund, reasonCode, reason, refundableUntil }`, `review { canReview, hasReviewed }`. REFUND_PENDING nam o tab ACTIVE (nhan "Đang hoàn tiền"); het han xet theo `expireAt`. |
+| `GET /wallet/:id` | CUSTOMER | Nhu tren + `stores`, `redemption`, `refundRequests`, `reviewId`. Voucher nguoi khac -> 404. |
+| `POST /redeem/token` `{ voucherItemId }` | CUSTOMER | `{ qrPayload, otpCode, expiresAt, ttlSeconds }`. QR dang `v1.<nonce>.<expMs>.<chu ky>` (khong chua id voucher). 429 `TOKEN_RATE_LIMITED` sau 10 lan / 10 phut. |
+| `POST /redeem` `{ storeId, qrPayload \| otpCode, billAmount? }` | STORE_STAFF | Gui **nguyen chuoi QR** (may chu kiem chu ky). Tra `{ redemptionLogId, voucherItemId, voucherCode, redeemedAt, method, billAmount, billEditableUntil, campaign }`. |
+| `PATCH /redeem/logs/:id/bill` `{ billAmount }` | STORE_STAFF | Sua hoa don trong 10 phut, chi nguoi da xac nhan. |
+| `GET /redeem/history/today` | STORE_STAFF | Kem `campaignTitle`, `voucherType`, `storeName`, `billEditable`. |
+| `POST /refunds` `{ voucherItemId, reason? }` | CUSTOMER | `status`: COMPLETED / FAILED / MANUAL_PENDING / REJECTED (kem `rejectReason`). |
+| `GET /refunds/me` | CUSTOMER | Kem `statusLabel`, `amount`, `campaignTitle`, `paymentRefund`. |
+| `GET /refunds/manual-pending` | ADMIN | Kem `customer`, `payment`, `amount`. |
+| `PATCH /refunds/:id/confirm-manual` `{ gatewayRefundId }` | ADMIN | Da hoan tay (bat buoc ma giao dich), ghi AuditLog. |
+| `PATCH /refunds/:id/fail-manual` `{ reason }` | ADMIN | Khong hoan duoc: FAILED, voucher ve ACTIVE / EXPIRED, ghi AuditLog. |
+| `GET /admin/payment-mismatches`, `PATCH .../:id/confirm-refund` | ADMIN | Don lech so tien (kem `campaignTitle`, `customer`). |
+| `POST /reviews` `{ campaignId, rating, comment? }` | CUSTOMER | Can >= 1 voucher USED cua chien dich; 1 danh gia / chien dich. Van nhan `voucherItemId` nhu ban cu. |
+| `GET /campaigns/:id/reviews?page&pageSize` | Cong khai | Chi VISIBLE, kem `avgRating`, `reviewCount`; ten nguoi danh gia da che. |
+| `GET /campaigns/:id/reviews/eligibility` | CUSTOMER | `{ canReview, reasonCode, reason, reviewId }`. |
+| `PATCH /reviews/:id/reply` `{ reply }` | BRAND_OWNER | Mot lan, chi thuong hieu so huu. |
+| `GET /admin/reviews?status&brandId`, `PATCH /admin/reviews/:id/hide` `{ reason }`, `PATCH .../unhide` | ADMIN | An / hien danh gia, ghi AuditLog; diem trung binh chi tinh VISIBLE. |
+
+Ma `error.reason` cua `POST /redeem`: `TOKEN_INVALID`, `TOKEN_EXPIRED`, `TOKEN_REVOKED`, `TOKEN_USED`, `OTP_INVALID`
+(`details.remainingAttempts`), `OTP_LOCKED` (429, `details.lockedUntil`), `VOUCHER_USED` (`details.usedAt`, `storeName`),
+`VOUCHER_EXPIRED`, `VOUCHER_REFUND_PENDING`, `VOUCHER_REFUNDED`, `WRONG_STORE` (`details.stores[]`),
+`BILL_REQUIRED` (ma chua bi tieu, nhap hoa don roi gui lai), `STORE_NOT_SELECTED`, `STAFF_NOT_ASSIGNED`, `CODE_REQUIRED`.
+
+CSDL da co du lieu (Neon) can chay them mot lan:
+
+```sql
+CREATE INDEX IF NOT EXISTS "IDX_cf00847498e2e51564cbc7a799" ON "redeem_tokens" ("otpCode");
+```
 
 ## Bien moi truong quan trong
 
@@ -168,19 +204,18 @@ Xem `.env.example` day du. Cac nhom chinh: `DB_*` (PostgreSQL), `JWT_*`, `OTP_*`
 
 ## Cac TODO nghiep vu chinh con lai (xem comment trong code)
 
-- Goi API hoan tien that cua cong sandbox + fallback thu cong (ASM-02) — `refund.service.ts`.
+- Cong hoan tien that: `RefundGateway` dang dung `SandboxRefundGateway` (payOS khong co API hoan tien);
+  co cong that thi ke thua `RefundGateway` va doi provider trong `refund.module.ts`.
 - Tinh khoang cach "gan toi" (Haversine) trong `search.service.ts` (FR-SEARCH-05/06).
 - Gui email OTP that qua SMTP, gui push qua Firebase Admin SDK.
 - Ghi log kiem toan cho cac thao tac quan trong vao bang `audit_logs` (NFR-SEC-07) — bang da co, chua ghi.
 - Tac vu nen chuyen trang thai theo SRS 6.1: APPROVED -> PUBLISHED, PUBLISHED <-> SOLD_OUT, -> ENDED; voucher het han -> EXPIRED (tru REFUND_PENDING).
-- Luong hoan tien day du qua cong: voucher REFUND_PENDING trong luc xu ly, yeu cau FAILED khi cong tu choi (SRS 6.2, 6.4);
-  quan tri vien hoan don PAYMENT_MISMATCH roi chuyen CANCELLED (SRS 6.3). Bang `payment_refunds` da co.
+- Don PAYMENT_MISMATCH quan tri vien khong hoan duoc: chua co trang thai rieng (hien chi co "da hoan" -> CANCELLED).
 - Dinh chi thuong hieu (BrandStatus.SUSPENDED, FR-BRAND-09) va cai dat thong bao (`notification_settings`).
 - Kiem tra quyen so huu: cac endpoint nhan `:brandId` / `:id` (chien dich, chi nhanh, nhan vien, bao cao,
   doi soat) chua kiem tra ban ghi co thuoc thuong hieu cua nguoi dang nhap (NFR-SEC-03, BR-19, DC-14).
 - Kiem tra chuyen trang thai chien dich: submit chi tu DRAFT va thuong hieu da duyet (BR-26),
   approve/reject chi tu PENDING, sua sau khi duyet dua ve PENDING (BR-17).
-- Khoa nhap OTP redeem 15 phut sau 5 lan sai (FR-REDEEM-12); danh dau nonce da dung ca khi khong hop le (FR-REDEEM-13).
 - Chan vo hieu hoa chi nhanh ap dung cuoi cung cua chien dich con voucher ACTIVE (BR-24).
 
 ## F02 F03 F04 F05 F14 implementation notes

@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wireframe F10–F11</title>
+<style>
+  :root { --ink:#1f2937; --line:#9ca3af; --soft:#e5e7eb; --fill:#f3f4f6; --note:#b45309; --bg:#ffffff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 32px 0 4px; }
+  p.lead { margin: 0 0 8px; color: #4b5563; max-width: 860px; }
+  .row { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; }
+  .frame { border: 2px solid var(--ink); border-radius: 14px; background: #fff; overflow: hidden; }
+  .phone { width: 300px; min-height: 600px; display: flex; flex-direction: column; }
+  .desk { width: 860px; max-width: 100%; min-height: 470px; display: grid; grid-template-columns: 170px 1fr; }
+  .bar { border-bottom: 1.5px solid var(--line); padding: 10px 12px; font-weight: 600; display: flex; justify-content: space-between; }
+  .body { padding: 12px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
+  .nav { border-top: 1.5px solid var(--line); display: grid; grid-template-columns: repeat(5, 1fr); font-size: 11px; text-align: center; }
+  .nav span { padding: 8px 0; } .nav .on { background: var(--soft); font-weight: 600; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; } .chip { border: 1.5px solid var(--line); border-radius: 999px; padding: 2px 9px; font-size: 12px; }
+  .chip.on { background: var(--soft); border-color: var(--ink); }
+  .card { border: 1.5px solid var(--line); border-radius: 10px; padding: 9px; display: flex; flex-direction: column; gap: 4px; }
+  .line { height: 9px; background: var(--soft); border-radius: 4px; } .w60{width:60%} .w40{width:40%} .w80{width:80%}
+  .btn { border: 2px solid var(--ink); border-radius: 8px; text-align: center; padding: 7px; font-weight: 600; font-size: 13px; }
+  .btn.ghost { border-style: dashed; color: #6b7280; }
+  .tag { align-self: flex-start; font-size: 11px; border: 1.5px solid var(--ink); border-radius: 999px; padding: 0 7px; }
+  .box { border: 2px dashed var(--line); border-radius: 10px; display: grid; place-items: center; color: #6b7280; background: var(--fill); }
+  .note { color: var(--note); font-size: 12px; border-left: 3px solid var(--note); padding-left: 6px; }
+  .side { border-right: 1.5px solid var(--line); padding: 12px 10px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+  .side .on { background: var(--soft); border-radius: 6px; padding: 4px 6px; font-weight: 600; }
+  .main { padding: 14px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .tabs { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1.5px solid var(--line); text-align: center; }
+  .tabs span { padding: 6px; } .tabs .on { border-bottom: 3px solid var(--ink); font-weight: 600; }
+  .field { border: 1.5px solid var(--line); border-radius: 8px; padding: 8px 10px; color: #6b7280; }
+  .result { border: 3px solid var(--ink); border-radius: 12px; padding: 14px; text-align: center; }
+  .result b { display: block; font-size: 22px; letter-spacing: .5px; }
+  .ok { background: repeating-linear-gradient(135deg, #fff, #fff 8px, #f3f4f6 8px, #f3f4f6 16px); }
+  .bad { background: repeating-linear-gradient(45deg, #fff, #fff 4px, #e5e7eb 4px, #e5e7eb 8px); }
+  .cap { font-size: 12px; color: #4b5563; margin-top: 6px; max-width: 300px; }
+  ul.small { margin: 2px 0 0 16px; padding: 0; font-size: 12px; }
+  @media print { body { padding: 0; } .frame { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<h1>Wireframe luồng sử dụng voucher</h1>
+<p class="lead">Wireframe low-fidelity cho task 4 (3 màn app khách) và task 5 (2 màn web cửa hàng). Chữ màu cam là ghi chú yêu cầu (SRS). Giao diện thật đã làm theo bố cục này. Có thể in trang thành PDF để đưa vào báo cáo.</p>
+
+<h2>App khách hàng (task 4)</h2>
+<div class="row">
+  <div>
+    <div class="frame phone">
+      <div class="bar">Ví voucher</div>
+      <div class="body">
+        <div class="note">Mất mạng: banner "Đang xem ví đã lưu lúc …" (SQLite), ẩn nút tạo mã (LIM-07)</div>
+        <div class="chips"><span class="chip on">Đang hiệu lực</span><span class="chip">Đã dùng</span><span class="chip">Hết hạn</span><span class="chip">Đã hoàn</span></div>
+        <div class="card"><div style="display:flex;justify-content:space-between"><b>Tên voucher</b><span class="tag">Đang hiệu lực</span></div>
+          <div class="line w60"></div><div class="line w40"></div><div class="btn">Sử dụng ngay</div></div>
+        <div class="card"><div style="display:flex;justify-content:space-between"><b>Tên voucher</b><span class="tag">Đang hoàn tiền</span></div>
+          <div class="line w60"></div><div class="line w40"></div>
+          <div class="note">REFUND_PENDING nằm ở tab Đang hiệu lực, không có nút dùng</div></div>
+        <div class="note">Chạm vào thẻ → chi tiết voucher đã mua · Kéo xuống để tải lại</div>
+      </div>
+      <div class="nav"><span>Khám phá</span><span>Tìm kiếm</span><span class="on">Ví</span><span>Đơn hàng</span><span>Cá nhân</span></div>
+    </div>
+    <div class="cap"><b>1. Ví voucher (FR-REDEEM-01).</b> 4 tab. Hết hạn xét theo expireAt, không chờ job.</div>
+  </div>
+
+  <div>
+    <div class="frame phone">
+      <div class="bar">← Chi tiết voucher</div>
+      <div class="body">
+        <div class="card"><div style="display:flex;justify-content:space-between"><b>Tên voucher</b><span class="tag">Trạng thái</span></div>
+          <div class="line w60"></div><div class="line w80"></div><div class="line w40"></div></div>
+        <div class="btn">Sử dụng ngay</div>
+        <div class="card"><b>Chi nhánh áp dụng</b><div class="line w80"></div><div class="line w60"></div></div>
+        <div class="card"><b>Hoàn tiền</b><div>Hạn chót: dd/MM/yyyy HH:mm</div>
+          <div class="btn ghost">Yêu cầu hoàn tiền</div>
+          <div class="note">Không đủ điều kiện: khóa nút + nêu lý do (FR-REFUND-04)</div></div>
+        <div class="card"><b>Đánh giá</b><div class="note">Chỉ hiện khi đã dùng và chưa đánh giá (BR-10)</div></div>
+      </div>
+    </div>
+    <div class="cap"><b>2. Chi tiết voucher đã mua.</b> Chỉ chủ sở hữu xem được.</div>
+  </div>
+
+  <div>
+    <div class="frame phone">
+      <div class="bar">← Sử dụng voucher</div>
+      <div class="body" style="align-items:center;text-align:center">
+        <b>Tên voucher</b>
+        <div class="box" style="width:200px;height:200px">QR động</div>
+        <b>Còn hiệu lực 57s</b>
+        <div style="font-size:12px;color:#6b7280">Mã OTP thay thế</div>
+        <div style="font-size:28px;font-weight:800;letter-spacing:6px">123 456</div>
+        <div class="btn" style="width:100%">Làm mới mã</div>
+        <div class="note" style="text-align:left">Hết 60 giây tự làm mới · giữ màn hình sáng · nhân viên xác nhận xong → "Voucher đã được sử dụng"</div>
+      </div>
+    </div>
+    <div class="cap"><b>3. Mã QR + OTP (FR-REDEEM-02/03).</b> Token HMAC, hạn 60 giây, tối đa 10 lần / 10 phút.</div>
+  </div>
+</div>
+
+<h2>Web cửa hàng (task 5)</h2>
+<div class="row">
+  <div>
+    <div class="frame desk">
+      <div class="side"><b>Web cửa hàng</b><span class="on">Xác nhận sử dụng</span><span>Lịch sử trong ngày</span><span>Đổi chi nhánh</span></div>
+      <div class="main">
+        <div style="display:flex;justify-content:space-between"><b>Xác nhận sử dụng voucher</b><span class="tag">Chi nhánh đang làm</span></div>
+        <div class="tabs"><span class="on">Quét QR</span><span>Nhập OTP</span></div>
+        <div class="field">Giá trị hóa đơn (VND) <span class="note">bắt buộc với voucher mệnh giá (BR-03)</span></div>
+        <div class="box" style="height:190px">Khung camera</div>
+        <div class="btn">Bật / tắt camera</div>
+        <div class="note">Tab OTP: ô 6 số + nút Xác nhận; sai 5 lần / 5 phút → khóa ô OTP 15 phút, quét QR vẫn được</div>
+      </div>
+    </div>
+    <div class="cap" style="max-width:860px"><b>4. Màn quét (FR-REDEEM-05/06).</b> Nút lớn, thao tác ít.</div>
+  </div>
+
+  <div>
+    <div class="frame desk">
+      <div class="side"><b>Web cửa hàng</b><span class="on">Xác nhận sử dụng</span><span>Lịch sử trong ngày</span><span>Đổi chi nhánh</span></div>
+      <div class="main">
+        <div class="row" style="gap:14px">
+          <div class="result ok" style="flex:1;min-width:220px">✓<b>HỢP LỆ</b>Tên voucher · mã · giờ · hóa đơn</div>
+          <div class="result bad" style="flex:1;min-width:220px">✕<b>ĐÃ SỬ DỤNG</b>Đã dùng lúc HH:mm dd/MM tại …</div>
+        </div>
+        <div class="row" style="gap:14px">
+          <div class="result bad" style="flex:1;min-width:220px">✕<b>SAI CHI NHÁNH</b>Áp dụng tại:<ul class="small"><li>Chi nhánh A — địa chỉ</li><li>Chi nhánh B — địa chỉ</li></ul></div>
+          <div class="result bad" style="flex:1;min-width:220px">✕<b>HẾT HẠN / CHỜ HOÀN</b>Mã hết hiệu lực · voucher đang chờ hoàn</div>
+        </div>
+        <div class="btn">→ Khách tiếp theo</div>
+        <div class="note">Đọc được trong 1 giây (NFR-USA-03). Thiếu hóa đơn: không hiện màn đỏ, giữ mã và nút "Gửi lại kèm hóa đơn".</div>
+      </div>
+    </div>
+    <div class="cap" style="max-width:860px"><b>5. Màn kết quả (FR-REDEEM-07).</b> Xanh hoặc đỏ, nêu rõ lý do.</div>
+  </div>
+</div>
+</body>
+</html>

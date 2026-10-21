@@ -1,8 +1,8 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ConfirmRefundDto } from '../report/dto/confirm-refund.dto';
 import { RefundService } from './refund.service';
-import { CreateRefundDto } from './dto/create-refund.dto';
+import { CreateRefundDto, FailManualRefundDto } from './dto/create-refund.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -28,15 +28,32 @@ export class RefundController {
     return this.refundService.findMyRequests(user.userId);
   }
 
+  // UC-07: hang doi hoan thu cong (don lech so tien nam o GET /admin/payment-mismatches)
   @Roles(Role.ADMIN)
   @Get('manual-pending')
   manualPending() {
     return this.refundService.findManualPending();
   }
 
+  // Da hoan tay: bat buoc nhap ma giao dich hoan
   @Roles(Role.ADMIN)
   @Patch(':id/confirm-manual')
-  confirmManual(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload, @Body() dto: ConfirmRefundDto) {
+  confirmManual(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() dto: ConfirmRefundDto,
+  ) {
     return this.refundService.confirmManualRefund(id, user.userId, dto.gatewayRefundId);
+  }
+
+  // Khong hoan duoc: yeu cau FAILED, voucher duoc khoi phuc cho khach
+  @Roles(Role.ADMIN)
+  @Patch(':id/fail-manual')
+  failManual(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() dto: FailManualRefundDto,
+  ) {
+    return this.refundService.failManualRefund(id, user.userId, dto.reason);
   }
 }

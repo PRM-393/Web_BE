@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -26,7 +27,9 @@ export class RedeemToken {
   @Column({ unique: true })
   nonce: string;
 
-  // ma OTP 6 chu so tuong ung, dung khi khong quet duoc QR - FR-REDEEM-03
+  // ma OTP 6 chu so tuong ung, dung khi khong quet duoc QR - FR-REDEEM-03.
+  // Index: nhan vien nhap OTP thi tra cuu theo otpCode, can phan hoi duoi 1 giay (FR-REDEEM-06)
+  @Index()
   @Column()
   otpCode: string;
 
