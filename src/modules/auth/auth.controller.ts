@@ -49,6 +49,12 @@ export class AuthController {
   logout(@CurrentUser() user: CurrentUserPayload) {
     return this.authService.logout(user.userId, user.sessionId);
   }
+  @Post('password-reset/request')
+  requestPasswordReset(@Body() dto: ActivationRequestDto) { return this.authService.requestPasswordReset(dto.email); }
+
+  @Post('password-reset/confirm')
+  resetPassword(@Body() dto: ActivateDto) { return this.authService.resetPassword(dto.email, dto.token, dto.password); }
+
   @Post('activation/request')
   requestActivation(@Body() dto: ActivationRequestDto) { return this.authService.sendActivation(dto.email); }
 
