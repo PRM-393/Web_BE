@@ -12,7 +12,11 @@ import { CampaignStore } from '../../entities/campaign-store.entity';
 import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
 import { VoucherItem } from '../../entities/voucher-item.entity';
 import { Role } from '../../common/enums/role.enum';
-import { BrandStatus, UserStatus, VoucherItemStatus } from '../../common/enums/status.enum';
+import { BrandStatus, CampaignStatus, FavoriteTargetType, ReviewStatus, UserStatus, VoucherItemStatus } from '../../common/enums/status.enum';
+import { AuditLog } from '../../entities/audit-log.entity';
+import { Review } from '../../entities/review.entity';
+import { Favorite } from '../../entities/favorite.entity';
+
 import { CreateBrandDto } from './dto/create-brand.dto';
 import { CreateStoreDto } from './dto/create-store.dto';
 import { UpdateStoreDto } from './dto/update-store.dto';
@@ -57,7 +61,7 @@ export class BrandService {
 
   async findOneOrFail(id: string) {
     const brand = await this.brandRepo.findOne({ where: { id } });
-    if (!brand) throw new NotFoundException('Khong tim thay thuong hieu.');
+    if (!brand) throw new NotFoundException('Không tìm thấy thương hiệu.');
     return brand;
   }
 
@@ -74,6 +78,84 @@ export class BrandService {
     brand.status = BrandStatus.REJECTED;
     brand.rejectReason = reason;
     return this.brandRepo.save(brand);
+  }
+
+  // FR-BRAND-09: danh sach thuong hieu cho quan tri (loc theo trang thai)
+  findAll(status?: string) {
+    const where = status && (Object.values(BrandStatus) as string[]).includes(status) ? { status: status as BrandStatus } : {};
+    return this.brandRepo.find({ where, order: { createdAt: 'DESC' } });
+  }
+
+  // FR-BRAND-09 / UC-06: dinh chi thuong hieu -> moi chien dich dang ban / da duyet chuyen PAUSED (khong tao don moi),
+  // don dang cho thanh toan van thanh toan not duoc (FR-CAMP-08). Ghi AuditLog.
+  async suspend(id: string, reason: string, actorUserId: string) {
+    if (!reason?.trim()) throw new BadRequestException('Vui lòng nhập lý do đình chỉ.');
+    const brand = await this.findOneOrFail(id);
+    if (brand.status !== BrandStatus.APPROVED) throw new BadRequestException('Chỉ đình chỉ được thương hiệu đang hoạt động.');
+    brand.status = BrandStatus.SUSPENDED;
+    brand.rejectReason = reason.trim();
+    await this.brandRepo.save(brand);
+    const paused = await this.campaignRepo.update(
+      { brandId: id, status: In([CampaignStatus.PUBLISHED, CampaignStatus.SOLD_OUT, CampaignStatus.APPROVED]) },
+      { status: CampaignStatus.PAUSED },
+    );
+    await this.brandRepo.manager.save(AuditLog, this.brandRepo.manager.create(AuditLog, {
+      actorUserId, action: 'SUSPEND_BRAND', entityType: 'Brand', entityId: id, detail: { reason: brand.rejectReason, pausedCampaigns: paused.affected ?? 0 },
+    }));
+    return { ...brand, pausedCampaigns: paused.affected ?? 0 };
+  }
+
+  // Khoi phuc: thuong hieu hoat dong lai; chien dich van tam dung, thuong hieu tu mo lai tung chien dich
+  async reinstate(id: string, actorUserId: string) {
+    const brand = await this.findOneOrFail(id);
+    if (brand.status !== BrandStatus.SUSPENDED) throw new BadRequestException('Thương hiệu không ở trạng thái đình chỉ.');
+    brand.status = BrandStatus.APPROVED;
+    brand.rejectReason = null as unknown as string;
+    await this.brandRepo.save(brand);
+    await this.brandRepo.manager.save(AuditLog, this.brandRepo.manager.create(AuditLog, {
+      actorUserId, action: 'REINSTATE_BRAND', entityType: 'Brand', entityId: id, detail: {},
+    }));
+    return brand;
+  }
+
+  // F06 / FR-BRAND-07: trang thuong hieu cong khai cho khach (Guest xem duoc): thong tin, chi nhanh dang mo,
+  // chien dich dang ban, diem danh gia trung binh (chi tinh danh gia VISIBLE), so nguoi theo doi
+  async publicProfile(id: string) {
+    const brand = await this.brandRepo.findOne({ where: { id, status: BrandStatus.APPROVED } });
+    if (!brand) throw new NotFoundException('Không tìm thấy thương hiệu.');
+    const [stores, campaigns, followers] = await Promise.all([
+      this.storeRepo.find({ where: { brandId: id, status: true }, order: { name: 'ASC' } }),
+      this.campaignRepo.find({
+        where: { brandId: id, status: In([CampaignStatus.PUBLISHED, CampaignStatus.SOLD_OUT]) },
+        order: { createdAt: 'DESC' },
+      }),
+      this.brandRepo.manager.count(Favorite, { where: { targetType: FavoriteTargetType.BRAND, targetId: id } }),
+    ]);
+    const ratings = campaigns.length
+      ? await this.brandRepo.manager
+          .createQueryBuilder(Review, 'r')
+          .select('COUNT(r.id)', 'count')
+          .addSelect('AVG(r.rating)', 'avg')
+          .where('r.campaignId IN (:...ids)', { ids: campaigns.map((c) => c.id) })
+          .andWhere('r.status = :visible', { visible: ReviewStatus.VISIBLE })
+          .getRawOne<{ count: string; avg: string | null }>()
+      : { count: '0', avg: null };
+    return {
+      id: brand.id,
+      name: brand.name,
+      logo: brand.logo,
+      description: brand.description,
+      contactInfo: brand.contactInfo,
+      stores: stores.map(({ id: sid, name, address, latitude, longitude, phone, openingHours }) => ({ id: sid, name, address, latitude, longitude, phone, openingHours })),
+      campaigns: campaigns.map((c) => ({
+        ...c,
+        availableQuantity: Math.max(0, c.totalQuantity - c.soldQuantity - c.reservedQuantity),
+        soldOut: c.status === CampaignStatus.SOLD_OUT,
+      })),
+      reviewCount: Number(ratings?.count ?? 0),
+      averageRating: ratings?.avg == null ? null : Math.round(Number(ratings.avg) * 10) / 10,
+      followerCount: followers,
+    };
   }
 
   // FR-BRAND-04
@@ -104,7 +186,7 @@ export class BrandService {
     // Chi nhanh da vo hieu roi thi khong can kiem lai, goi lai cho ket qua nhu cu
     if (store.status) await this.assertCanDeactivateStore(store);
     await this.storeRepo.update(storeId, { status: false });
-    return { message: 'Da vo hieu hoa chi nhanh.' };
+    return { message: 'Đã vô hiệu hóa chi nhánh.' };
   }
 
   private async findStoreOrFail(storeId: string) {
@@ -223,6 +305,6 @@ export class BrandService {
     await this.staffRepo.update({ userId: assignment.userId }, { active: false });
     await this.userRepo.update(assignment.userId, { status: UserStatus.INACTIVE });
     await this.sessionRepo.update({ userId: assignment.userId, revokedAt: IsNull() }, { revokedAt: new Date() });
-    return { message: 'Da vo hieu hoa nhan vien.' };
+    return { message: 'Đã vô hiệu hóa nhân viên.' };
   }
 }

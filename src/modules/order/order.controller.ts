@@ -106,7 +106,7 @@ export class OrderController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: { success?: boolean },
   ) {
-    if (process.env.PAYMENT_SIMULATOR !== 'true') throw new ForbiddenException('Che do gia lap thanh toan dang tat.');
+    if (process.env.PAYMENT_SIMULATOR !== 'true') throw new ForbiddenException('Chế độ giả lập thanh toán đang tắt.');
     const order = await this.orderService.findMyOrder(user.userId, id);
     const outcome = await this.orderService.processPayment({
       orderId: order.id,
