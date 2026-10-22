@@ -130,7 +130,13 @@ export class SettlementService {
         .andWhere('v.status IN (:...statuses)', {
           statuses: [VoucherItemStatus.ACTIVE, VoucherItemStatus.USED, VoucherItemStatus.EXPIRED],
         })
-        .andWhere('v.refundableUntil <= :end', { end: periodEnd })
+        // Het quyen hoan TAI THOI DIEM CHOT: da dung / het han, hoac da qua refundableUntil.
+        // Chot giua ky (nut "chot" cua quan tri) thi moc la luc chot, khong phai cuoi ky - neu khong
+        // voucher con dang trong 7 ngay hoan van bi tinh vao phieu (vi pham BR-14).
+        .andWhere('(v.status IN (:...done) OR v.refundableUntil <= :cutoff)', {
+          done: [VoucherItemStatus.USED, VoucherItemStatus.EXPIRED],
+          cutoff: new Date(Math.min(Date.now(), periodEnd.getTime())),
+        })
         // chua thuoc phieu nao: LEFT JOIN ... IS NULL chay giong nhau tren PostgreSQL va MySQL
         .leftJoin(SettlementItem, 'si', 'si.voucherItemId = v.id')
         .andWhere('si.id IS NULL')
