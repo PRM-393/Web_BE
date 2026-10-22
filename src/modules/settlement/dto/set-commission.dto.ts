@@ -8,7 +8,7 @@ export class SetCommissionDto {
   @ApiProperty({ description: 'Ty le lon hon 0 va nho hon 1, vi du 0.10 = 10%', example: 0.1 })
   @IsNumber(
     { maxDecimalPlaces: 4 },
-    { message: 'Ty le hoa hong phai la so, toi da 4 chu so thap phan (vi du 0.1 hoac 0.075).' },
+    { message: 'Tỷ lệ hoa hồng phải là số, tối đa 4 chữ số thập phân (ví dụ 0.1 hoặc 0.075).' },
   )
   rate: number;
 }

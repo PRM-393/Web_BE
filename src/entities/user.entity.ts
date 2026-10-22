@@ -21,7 +21,8 @@ export class User {
   @Column({ nullable: true })
   phone: string;
 
-  @Column({ nullable: true })
+  // F17: data URL anh dai dien (base64, ≤ 2 MB) nen can kieu text
+  @Column({ type: 'text', nullable: true })
   avatar: string;
 
   @Column({ type: 'enum', enum: Role, default: Role.CUSTOMER })

@@ -25,17 +25,17 @@ export function validateValueFields(dto: ValueFields) {
   const faceValue = Number(dto.faceValue);
   if (dto.voucherType === VoucherType.DISCOUNT) {
     if (!dto.discountType || !dto.discountValue) {
-      throw new BadRequestException('Ma giam gia can kieu giam (so tien / phan tram) va gia tri giam.');
+      throw new BadRequestException('Mã giảm giá cần kiểu giảm (số tiền / phần trăm) và giá trị giảm.');
     }
     if (dto.discountType === DiscountType.PERCENT && (Number(dto.discountValue) > 100 || !dto.maxDiscount)) {
-      throw new BadRequestException('Giam theo phan tram can gia tri tu 1 den 100 va muc giam toi da.');
+      throw new BadRequestException('Giảm theo phần trăm cần giá trị từ 1 đến 100 và mức giảm tối đa.');
     }
   }
   if (dto.voucherType === VoucherType.PREPAID && faceValue <= salePrice) {
-    throw new BadRequestException('Voucher menh gia phai co gia tri lon hon gia ban.');
+    throw new BadRequestException('Voucher mệnh giá phải có giá trị lớn hơn giá bán.');
   }
   if (dto.voucherType === VoucherType.COMBO && !dto.comboItems) {
-    throw new BadRequestException('Combo can mo ta noi dung goi.');
+    throw new BadRequestException('Combo cần mô tả nội dung gói.');
   }
 }
 
@@ -62,10 +62,10 @@ export function validateTimeline(fields: TimelineFields) {
   const end = toTime(fields.saleEndAt);
   const expire = toTime(fields.voucherExpireAt);
   if (start === null || end === null || expire === null) {
-    throw new BadRequestException('Thieu ngay bat dau ban, ngay ket thuc ban hoac han su dung voucher.');
+    throw new BadRequestException('Thiếu ngày bắt đầu bán, ngày kết thúc bán hoặc hạn sử dụng voucher.');
   }
   if (start >= end) {
-    throw new BadRequestException('Ngay ket thuc ban phai sau ngay bat dau ban (BR-21).');
+    throw new BadRequestException('Ngày kết thúc bán phải sau ngày bắt đầu bán.');
   }
   if (expire < end + MIN_EXPIRE_DAYS_AFTER_SALE_END * DAY_MS) {
     throw new BadRequestException(
@@ -137,7 +137,7 @@ export class CampaignService {
 
   async findOneOrFail(id: string) {
     const campaign = await this.campaignRepo.findOne({ where: { id } });
-    if (!campaign) throw new NotFoundException('Khong tim thay chien dich.');
+    if (!campaign) throw new NotFoundException('Không tìm thấy chiến dịch.');
     return campaign;
   }
 
@@ -145,11 +145,11 @@ export class CampaignService {
   async submitForApproval(id: string) {
     const campaign = await this.findOneOrFail(id);
     if (campaign.status !== CampaignStatus.DRAFT) {
-      throw new BadRequestException('Chi co the gui duyet chien dich o trang thai nhap (FR-CAMP-14).');
+      throw new BadRequestException('Chỉ có thể gửi duyệt chiến dịch ở trạng thái nháp.');
     }
     // BR-26: thuong hieu chua duoc duyet hoac dang bi dinh chi khong duoc gui duyet chien dich
     const brand = await this.brandRepo.findOne({ where: { id: campaign.brandId } });
-    if (!brand) throw new NotFoundException('Khong tim thay thuong hieu.');
+    if (!brand) throw new NotFoundException('Không tìm thấy thương hiệu.');
     if (brand.status !== BrandStatus.APPROVED) {
       throw new BadRequestException(
         'Thuong hieu chua duoc duyet hoac dang bi dinh chi nen khong the gui duyet chien dich (BR-26).',
@@ -168,7 +168,7 @@ export class CampaignService {
   async withdraw(id: string) {
     const campaign = await this.findOneOrFail(id);
     if (campaign.status !== CampaignStatus.PENDING) {
-      throw new BadRequestException('Chi co the rut ve nhap chien dich dang cho duyet (FR-CAMP-14).');
+      throw new BadRequestException('Chỉ có thể rút về nháp chiến dịch đang chờ duyệt.');
     }
     campaign.status = CampaignStatus.DRAFT;
     campaign.submittedAt = null;
@@ -179,7 +179,7 @@ export class CampaignService {
   async approve(id: string, adminUserId: string) {
     const campaign = await this.findOneOrFail(id);
     if (campaign.status !== CampaignStatus.PENDING) {
-      throw new BadRequestException('Chi co the duyet chien dich dang cho duyet.');
+      throw new BadRequestException('Chỉ có thể duyệt chiến dịch đang chờ duyệt.');
     }
     // UC-04 luong 3b: vi pham rang buoc ngay hoac gia tri thi khong cho duyet,
     // quan tri vien phai tu choi kem ly do de thuong hieu sua lai
@@ -209,7 +209,7 @@ export class CampaignService {
   async pause(id: string) {
     const campaign = await this.findOneOrFail(id);
     if (campaign.status !== CampaignStatus.PUBLISHED) {
-      throw new BadRequestException('Chi co the tam dung chien dich dang ban.');
+      throw new BadRequestException('Chỉ có thể tạm dừng chiến dịch đang bán.');
     }
     campaign.status = CampaignStatus.PAUSED;
     return this.campaignRepo.save(campaign);
@@ -219,7 +219,12 @@ export class CampaignService {
     const campaign = await this.findOneOrFail(id);
     // Khong cho mo lai tu DRAFT / ENDED: lam vay se dua chien dich chua duyet len ban cong khai (NFR-SEC-03)
     if (campaign.status !== CampaignStatus.PAUSED) {
-      throw new BadRequestException('Chi co the mo lai chien dich dang tam dung.');
+      throw new BadRequestException('Chỉ có thể mở lại chiến dịch đang tạm dừng.');
+    }
+    // FR-BRAND-09: thuong hieu dang bi dinh chi thi khong duoc mo ban lai
+    const brand = await this.brandRepo.findOne({ where: { id: campaign.brandId } });
+    if (brand?.status === BrandStatus.SUSPENDED) {
+      throw new BadRequestException('Thương hiệu đang bị đình chỉ, không thể mở bán lại chiến dịch.');
     }
     campaign.status = CampaignStatus.PUBLISHED;
     return this.campaignRepo.save(campaign);

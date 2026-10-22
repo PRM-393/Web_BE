@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { BrandService } from './brand.service';
 import { CreateBrandDto } from './dto/create-brand.dto';
@@ -30,6 +30,34 @@ export class BrandController {
   @Get('me')
   findMine(@CurrentUser() user: CurrentUserPayload) {
     return this.brandService.findMyBrands(user.userId);
+  }
+
+  // FR-BRAND-09: quan tri xem tat ca thuong hieu (loc ?status=APPROVED|SUSPENDED|PENDING|REJECTED)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @Get()
+  findAll(@Query('status') status?: string) {
+    return this.brandService.findAll(status);
+  }
+
+  // F06 / FR-BRAND-07: trang thuong hieu cong khai, khong can dang nhap
+  @Get(':id/public')
+  publicProfile(@Param('id', ParseUUIDPipe) id: string) {
+    return this.brandService.publicProfile(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @Patch(':id/suspend')
+  suspend(@Param('id') id: string, @Body('reason') reason: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.brandService.suspend(id, reason, user.userId);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @Patch(':id/reinstate')
+  reinstate(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.brandService.reinstate(id, user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard, BrandResourceGuard)
