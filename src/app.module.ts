@@ -14,6 +14,7 @@ import { RefundModule } from './modules/refund/refund.module';
 import { SettlementModule } from './modules/settlement/settlement.module';
 import { ReportModule } from './modules/report/report.module';
 import { EngageModule } from './modules/engage/engage.module';
+import { ProfileModule } from './modules/profile/profile.module';
 import { NotificationModule } from './modules/notification/notification.module';
 import { WalletModule } from './modules/wallet/wallet.module';
 
@@ -34,6 +35,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     SettlementModule,
     ReportModule,
     EngageModule,
+    ProfileModule,
     NotificationModule,
     WalletModule,
   ],

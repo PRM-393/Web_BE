@@ -168,7 +168,7 @@ export class NotificationService {
 
   async markRead(userId: string, id: string) {
     const n = await this.notificationRepo.findOne({ where: { id, userId } });
-    if (!n) throw new NotFoundException('Khong tim thay thong bao.');
+    if (!n) throw new NotFoundException('Không tìm thấy thông báo.');
     if (!n.readAt) {
       n.readAt = new Date();
       await this.notificationRepo.save(n);

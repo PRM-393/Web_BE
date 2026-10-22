@@ -91,11 +91,11 @@ describe('F09 - mua va thanh toan (e2e)', () => {
     await newCustomer('binh');
     const c = await newCampaign(10, 2);
     const over = await placeOrder('binh', c.id, 3, 400);
-    expect(over.error.message).toContain('toi da 2');
+    expect(over.error.message).toContain('tối đa 2');
 
     await placeOrder('binh', c.id, 2);
     const again = await placeOrder('binh', c.id, 1, 400);
-    expect(again.error.message).toContain('gioi han 2');
+    expect(again.error.message).toContain('giới hạn 2');
   });
 
   it('thanh toan thanh cong: PAID -> FULFILLED, chot hoa hong, sinh voucher co refundableUntil; webhook trung chi xu ly 1 lan', async () => {
