@@ -1,12 +1,13 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, LessThanOrEqual, MoreThan, Repository } from 'typeorm';
 import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
 import { CampaignStore } from '../../entities/campaign-store.entity';
 import { Brand } from '../../entities/brand.entity';
 import { BrandStatus, CampaignStatus, DiscountType, VoucherType } from '../../common/enums/status.enum';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { UpdateCampaignDto } from './dto/update-campaign.dto';
+import { NotificationService } from '../notification/notification.service';
 
 // FR-CAMP-12: truong gia tri bat buoc theo loai voucher
 export interface ValueFields {
@@ -83,6 +84,8 @@ const NEEDS_REAPPROVAL: CampaignStatus[] = [
 
 @Injectable()
 export class CampaignService {
+  private readonly logger = new Logger(CampaignService.name);
+
   constructor(
     @InjectRepository(VoucherCampaign)
     private readonly campaignRepo: Repository<VoucherCampaign>,
@@ -90,6 +93,8 @@ export class CampaignService {
     private readonly campaignStoreRepo: Repository<CampaignStore>,
     @InjectRepository(Brand)
     private readonly brandRepo: Repository<Brand>,
+    // F16: tuy chon de unit test cua F08 khoi tao service khong can module thong bao
+    @Optional() private readonly notifications?: NotificationService,
   ) {}
 
   // FR-CAMP-01..05: tao chien dich o trang thai DRAFT
@@ -303,6 +308,19 @@ export class CampaignService {
     // Thu tu 4 buoc duoi day co y nghia: chien dich vua phat hanh o buoc 1 ma da het hang se duoc buoc 2
     // bat ngay trong cung mot luot, khong phai doi them 5 phut.
 
+    // F16: ghi nho chien dich sap duoc phat hanh de bao cho nguoi theo doi thuong hieu sau khi doi trang thai
+    const toPublish = this.notifications
+      ? await this.campaignRepo.find({
+          select: ['id'],
+          where: {
+            status: CampaignStatus.APPROVED,
+            saleStartAt: LessThanOrEqual(now),
+            saleEndAt: MoreThan(now),
+            ...(campaignId ? { id: campaignId } : {}),
+          },
+        })
+      : [];
+
     // 1. APPROVED -> PUBLISHED khi toi ngay bat dau ban va van con thoi gian ban (FR-CAMP-07)
     const published = await this.transition([CampaignStatus.APPROVED], CampaignStatus.PUBLISHED, campaignId)
       .andWhere(`${col('saleStartAt')} <= :now`)
@@ -337,6 +355,8 @@ export class CampaignService {
       .setParameter('now', now)
       .execute();
 
+    await this.notifyFollowers(toPublish.map((c) => c.id));
+
     return {
       published: published.affected ?? 0,
       soldOut: soldOut.affected ?? 0,
@@ -357,6 +377,20 @@ export class CampaignService {
     // Duyet xong thi chi ra soat dung chien dich vua duyet
     if (campaignId) qb.andWhere(`${col('id')} = :campaignId`, { campaignId });
     return qb;
+  }
+
+  // F16 (FR-BRAND-07): chien dich vua PUBLISHED -> thong bao cho khach theo doi thuong hieu (chong gui trung theo dedupeKey).
+  // Loi gui thong bao khong duoc lam hong luot ra soat trang thai.
+  private async notifyFollowers(ids: string[]) {
+    if (!this.notifications || ids.length === 0) return;
+    const campaigns = await this.campaignRepo.find({ where: { id: In(ids), status: CampaignStatus.PUBLISHED }, relations: ['brand'] });
+    for (const c of campaigns) {
+      try {
+        await this.notifications.campaignPublished(c, c.brand?.name ?? 'Thương hiệu bạn theo dõi');
+      } catch (error) {
+        this.logger.warn(`Khong gui duoc thong bao chien dich moi ${c.id}: ${error instanceof Error ? error.message : error}`);
+      }
+    }
   }
 
   findPendingApproval() {
