@@ -6,6 +6,7 @@ import { CampaignStatus, VoucherItemStatus, VoucherType } from '../src/common/en
 import { Role } from '../src/common/enums/role.enum';
 import { NotificationService } from '../src/modules/notification/notification.service';
 import { PushSender } from '../src/modules/notification/push-sender';
+import { CampaignService } from '../src/modules/campaign/campaign.service';
 import { signWebhook } from '../src/modules/order/payment-gateway';
 import { ID, TestApp, createTestApp } from './helpers/test-app';
 
@@ -201,6 +202,22 @@ describe('F16 - thong bao (e2e)', () => {
     expect(t.app.get(PushSender).configured).toBe(false);
     expect(await t.app.get(PushSender).send(['x'], { title: 'a', body: 'b' })).toBe(0);
     expect(await ds.getRepository(Notification).count()).toBeGreaterThan(0);
+  });
+
+  it('job F08 phat hanh chien dich -> khach theo doi thuong hieu nhan thong bao, chay lai khong gui trung (FR-BRAND-07)', async () => {
+    await newCustomer('khoa');
+    await t.http.post('/api/favorites').set(auth('khoa')).send({ targetType: 'BRAND', targetId: ID.brand }).expect(201);
+    const c = await newCampaign('Ca phe sua da 2 ly');
+    await ds.getRepository(VoucherCampaign).update(c.id, { status: CampaignStatus.APPROVED });
+
+    const campaigns = t.app.get(CampaignService);
+    await campaigns.runStatusTransitions(new Date());
+    await campaigns.runStatusTransitions(new Date());
+
+    const news = (await myNotifications('khoa')).data.items.filter((n: { type: string }) => n.type === 'CAMPAIGN_NEW');
+    expect(news).toHaveLength(1);
+    expect(news[0].body).toContain('Ca phe sua da 2 ly');
+    expect(news[0].data.campaignId).toBe(c.id);
   });
 
   it('can dang nhap moi xem duoc thong bao', async () => {
