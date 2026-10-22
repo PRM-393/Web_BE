@@ -1,12 +1,13 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, LessThanOrEqual, MoreThan, Repository } from 'typeorm';
 import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
 import { CampaignStore } from '../../entities/campaign-store.entity';
 import { Brand } from '../../entities/brand.entity';
 import { BrandStatus, CampaignStatus, DiscountType, VoucherType } from '../../common/enums/status.enum';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { UpdateCampaignDto } from './dto/update-campaign.dto';
+import { NotificationService } from '../notification/notification.service';
 
 // FR-CAMP-12: truong gia tri bat buoc theo loai voucher
 export interface ValueFields {
@@ -83,6 +84,8 @@ const NEEDS_REAPPROVAL: CampaignStatus[] = [
 
 @Injectable()
 export class CampaignService {
+  private readonly logger = new Logger(CampaignService.name);
+
   constructor(
     @InjectRepository(VoucherCampaign)
     private readonly campaignRepo: Repository<VoucherCampaign>,
@@ -90,6 +93,8 @@ export class CampaignService {
     private readonly campaignStoreRepo: Repository<CampaignStore>,
     @InjectRepository(Brand)
     private readonly brandRepo: Repository<Brand>,
+    // F16: tuy chon de unit test cua F08 khoi tao service khong can module thong bao
+    @Optional() private readonly notifications?: NotificationService,
   ) {}
 
   // FR-CAMP-01..05: tao chien dich o trang thai DRAFT
@@ -184,8 +189,13 @@ export class CampaignService {
     campaign.status = CampaignStatus.APPROVED;
     campaign.approvedBy = adminUserId;
     campaign.approvedAt = new Date();
-    // TODO: tac vu nen kiem tra saleStartAt de tu dong chuyen sang PUBLISHED (FR-CAMP-10)
-    return this.campaignRepo.save(campaign);
+    const saved = await this.campaignRepo.save(campaign);
+
+    // FR-CAMP-07 / FR-CAMP-10: duyet xong ma da toi ngay ban thi phat hanh ngay, khong bat thuong hieu
+    // doi het mot luot 5 phut cua tac vu nen. Goi lai runStatusTransitions de luat chuyen trang thai
+    // chi nam o mot cho duy nhat.
+    await this.runStatusTransitions(new Date(), saved.id);
+    return this.findOneOrFail(saved.id);
   }
 
   async reject(id: string, reason: string) {
@@ -274,6 +284,113 @@ export class CampaignService {
       reservedQuantity: campaign.reservedQuantity,
       remaining: campaign.totalQuantity - campaign.soldQuantity - campaign.reservedQuantity,
     };
+  }
+
+  // Boc ten cot theo he quan tri CSDL dang chay: PostgreSQL dung dau nhay kep, MySQL dung dau huyen
+  private readonly col = (name: string) => this.campaignRepo.manager.connection.driver.escape(name);
+
+  // FR-CAMP-10 / BR-08: cac buoc chuyen trang thai tu dong cua chien dich, dung chung cho tac vu nen
+  // (CampaignScheduler, 5 phut mot luot) va cho luc duyet xong.
+  //
+  // BR-25: moc "ngay ban" da nam san trong saleStartAt / saleEndAt duoi dang moc thoi gian tuyet doi
+  // (luu UTC - CON-05, thuong hieu nhap theo gio VN), nen so sanh voi thoi diem hien tai cho cung ket qua
+  // du may chu chay o mui gio nao. Dieu bat buoc phai tranh la dung lich cuc bo cua may chu de dung lai
+  // moc ngay (kieu new Date(nam, thang, ngay)) - may chu Render chay UTC nen se lech 7 gio.
+  //
+  // Job CHI duoc doi cot status: soldQuantity / reservedQuantity do F09 (mua hang) va F12 (hoan tien) giu,
+  // ghi de o day se lam sai ton kho.
+  async runStatusTransitions(now: Date = new Date(), campaignId?: string) {
+    const col = this.col;
+    // Ton kho kha dung - DC-03
+    const available = `${col('totalQuantity')} - ${col('soldQuantity')} - ${col('reservedQuantity')}`;
+    const stillSelling = `${col('saleEndAt')} > :now`;
+
+    // Thu tu 4 buoc duoi day co y nghia: chien dich vua phat hanh o buoc 1 ma da het hang se duoc buoc 2
+    // bat ngay trong cung mot luot, khong phai doi them 5 phut.
+
+    // F16: ghi nho chien dich sap duoc phat hanh de bao cho nguoi theo doi thuong hieu sau khi doi trang thai
+    const toPublish = this.notifications
+      ? await this.campaignRepo.find({
+          select: ['id'],
+          where: {
+            status: CampaignStatus.APPROVED,
+            saleStartAt: LessThanOrEqual(now),
+            saleEndAt: MoreThan(now),
+            ...(campaignId ? { id: campaignId } : {}),
+          },
+        })
+      : [];
+
+    // 1. APPROVED -> PUBLISHED khi toi ngay bat dau ban va van con thoi gian ban (FR-CAMP-07)
+    const published = await this.transition([CampaignStatus.APPROVED], CampaignStatus.PUBLISHED, campaignId)
+      .andWhere(`${col('saleStartAt')} <= :now`)
+      .andWhere(stillSelling)
+      .setParameter('now', now)
+      .execute();
+
+    // 2. Ton kho kha dung ve 0 -> SOLD_OUT. Khong dong vao PAUSED: tam dung la quyet dinh cua thuong hieu,
+    //    job khong duoc tu y doi (FR-CAMP-08).
+    const soldOut = await this.transition([CampaignStatus.PUBLISHED], CampaignStatus.SOLD_OUT, campaignId)
+      .andWhere(`${available} <= 0`)
+      .andWhere(stillSelling)
+      .setParameter('now', now)
+      .execute();
+
+    // 3. Nha giu cho (don qua han - F09) hoac cong tra hang khi hoan tien (F12) ma con thoi gian ban
+    //    -> quay lai PUBLISHED
+    const restocked = await this.transition([CampaignStatus.SOLD_OUT], CampaignStatus.PUBLISHED, campaignId)
+      .andWhere(`${available} > 0`)
+      .andWhere(stillSelling)
+      .setParameter('now', now)
+      .execute();
+
+    // 4. Het thoi gian ban -> ENDED. APPROVED khong vao day: chien dich duyet roi ma lo mat cua so ban
+    //    van sua lai ngay duoc (sua xong ve PENDING - FR-CAMP-15), con ENDED thi het duong quay lai.
+    const ended = await this.transition(
+      [CampaignStatus.PUBLISHED, CampaignStatus.PAUSED, CampaignStatus.SOLD_OUT],
+      CampaignStatus.ENDED,
+      campaignId,
+    )
+      .andWhere(`${col('saleEndAt')} <= :now`)
+      .setParameter('now', now)
+      .execute();
+
+    await this.notifyFollowers(toPublish.map((c) => c.id));
+
+    return {
+      published: published.affected ?? 0,
+      soldOut: soldOut.affected ?? 0,
+      restocked: restocked.affected ?? 0,
+      ended: ended.affected ?? 0,
+    };
+  }
+
+  // UPDATE ... SET status = :to WHERE status IN (:...from): mot cau lenh duy nhat nen khong co khe doc - ghi
+  // voi luong mua hang chay song song (F09 khoa chien dich bang SELECT ... FOR UPDATE).
+  private transition(from: CampaignStatus[], to: CampaignStatus, campaignId?: string) {
+    const col = this.col;
+    const qb = this.campaignRepo
+      .createQueryBuilder()
+      .update(VoucherCampaign)
+      .set({ status: to })
+      .where(`${col('status')} IN (:...from)`, { from });
+    // Duyet xong thi chi ra soat dung chien dich vua duyet
+    if (campaignId) qb.andWhere(`${col('id')} = :campaignId`, { campaignId });
+    return qb;
+  }
+
+  // F16 (FR-BRAND-07): chien dich vua PUBLISHED -> thong bao cho khach theo doi thuong hieu (chong gui trung theo dedupeKey).
+  // Loi gui thong bao khong duoc lam hong luot ra soat trang thai.
+  private async notifyFollowers(ids: string[]) {
+    if (!this.notifications || ids.length === 0) return;
+    const campaigns = await this.campaignRepo.find({ where: { id: In(ids), status: CampaignStatus.PUBLISHED }, relations: ['brand'] });
+    for (const c of campaigns) {
+      try {
+        await this.notifications.campaignPublished(c, c.brand?.name ?? 'Thương hiệu bạn theo dõi');
+      } catch (error) {
+        this.logger.warn(`Khong gui duoc thong bao chien dich moi ${c.id}: ${error instanceof Error ? error.message : error}`);
+      }
+    }
   }
 
   findPendingApproval() {
