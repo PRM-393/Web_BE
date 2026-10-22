@@ -23,7 +23,7 @@ export const DEFAULT_COMMISSION_RATE = 0.1;
 export function validateCommissionRate(rate: unknown): number {
   const value = typeof rate === 'string' ? Number(rate) : rate;
   if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new BadRequestException('Ty le hoa hong phai la mot so. Vi du nhap 0.1 de thu 10%.');
+    throw new BadRequestException('Tỷ lệ hoa hồng phải là một số. Ví dụ nhập 0.1 để thu 10%.');
   }
   if (value <= 0 || value >= 1) {
     throw new BadRequestException(
@@ -70,7 +70,7 @@ export class SettlementService {
       }),
     );
 
-    return { message: 'Da cap nhat ty le hoa hong.', rate };
+    return { message: 'Đã cập nhật tỷ lệ hoa hồng.', rate };
   }
 
   async getCommissionRate(): Promise<number> {
@@ -199,7 +199,7 @@ export class SettlementService {
 
   async findOneOrFail(id: string) {
     const settlement = await this.settlementRepo.findOne({ where: { id } });
-    if (!settlement) throw new NotFoundException('Khong tim thay phieu doi soat.');
+    if (!settlement) throw new NotFoundException('Không tìm thấy phiếu đối soát.');
     return settlement;
   }
 
@@ -207,7 +207,7 @@ export class SettlementService {
   async markPaid(id: string, bankTxnRef: string) {
     const settlement = await this.findOneOrFail(id);
     if (settlement.status === SettlementStatus.PAID) {
-      throw new BadRequestException('Phieu doi soat da duoc chi tra.');
+      throw new BadRequestException('Phiếu đối soát đã được chi trả.');
     }
     settlement.status = SettlementStatus.PAID;
     settlement.paidAt = new Date();

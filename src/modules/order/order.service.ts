@@ -63,10 +63,10 @@ export class OrderService {
       // Khoa ban ghi chien dich de 2 nguoi mua voucher cuoi cung cung luc khong ban vuot
       const campaign = await this.lockCampaign(manager, dto.campaignId);
       if (campaign.status !== CampaignStatus.PUBLISHED || !isOnSale(campaign, new Date())) {
-        throw new BadRequestException('Chien dich khong con dang ban.');
+        throw new BadRequestException('Chiến dịch không còn đang bán.');
       }
       if (dto.quantity > availableStock(campaign)) {
-        throw new BadRequestException(`Chi con ${Math.max(0, availableStock(campaign))} voucher, vui long giam so luong.`);
+        throw new BadRequestException(`Chỉ còn ${Math.max(0, availableStock(campaign))} voucher, vui lòng giảm số lượng.`);
       }
 
       // BR-01: da mua (moi voucher da phat hanh) + don PENDING + so dat <= gioi han
@@ -76,15 +76,15 @@ export class OrderService {
       if (dto.quantity > quota) {
         throw new BadRequestException(
           quota === 0
-            ? `Ban da dat gioi han ${campaign.limitPerUser} voucher cho chien dich nay.`
-            : `Ban chi con duoc mua toi da ${quota} voucher cho chien dich nay.`,
+            ? `Bạn đã đạt giới hạn ${campaign.limitPerUser} voucher cho chiến dịch này.`
+            : `Bạn chỉ còn được mua tối đa ${quota} voucher cho chiến dịch này.`,
         );
       }
 
       // Lop bao ve thu hai (DC-03): cong giu cho bang mot cau UPDATE co dieu kien, nguyen tu tren moi he CSDL,
       // ke ca khi khoa dong khong co tac dung. Khong du ton kho -> 0 dong duoc cap nhat -> tu choi.
       if (!(await this.reserveStock(manager, campaign.id, dto.quantity))) {
-        throw new BadRequestException('Voucher vua het, vui long chon so luong khac.');
+        throw new BadRequestException('Voucher vừa hết, vui lòng chọn số lượng khác.');
       }
       const reserved = await manager.findOneByOrFail(VoucherCampaign, { id: campaign.id });
       if (availableStock(reserved) === 0 && reserved.status === CampaignStatus.PUBLISHED) {
@@ -111,9 +111,9 @@ export class OrderService {
   // FR-ORDER-12: thanh toan lai don PENDING con trong thoi gian giu cho, lien ket het han dung reservedUntil
   async retryPayment(userId: string, orderId: string) {
     const order = await this.findMyOrder(userId, orderId);
-    if (order.status !== OrderStatus.PENDING) throw new BadRequestException('Don hang khong con cho thanh toan.');
+    if (order.status !== OrderStatus.PENDING) throw new BadRequestException('Đơn hàng không còn chờ thanh toán.');
     if (new Date(order.reservedUntil).getTime() <= Date.now()) {
-      throw new BadRequestException('Don hang da het thoi gian giu cho, vui long dat lai.');
+      throw new BadRequestException('Đơn hàng đã hết thời gian giữ chỗ, vui lòng đặt lại.');
     }
     return { order, paymentUrl: await this.ensurePaymentLink(order) };
   }
@@ -153,8 +153,8 @@ export class OrderService {
   // FR-ORDER-05: app hoi trang thai don tu may chu, khong tin ket qua tra ve tu cong
   async findMyOrder(userId: string, orderId: string) {
     const order = await this.orderRepo.findOne({ where: { id: orderId }, relations: ['campaign'] });
-    if (!order) throw new NotFoundException('Khong tim thay don hang.');
-    if (order.userId !== userId) throw new ForbiddenException('Ban khong co quyen xem don hang nay.');
+    if (!order) throw new NotFoundException('Không tìm thấy đơn hàng.');
+    if (order.userId !== userId) throw new ForbiddenException('Bạn không có quyền xem đơn hàng này.');
     return order;
   }
 
@@ -162,7 +162,7 @@ export class OrderService {
 
   // Webhook JSON chung: xac thuc chu ky truoc moi xu ly
   async handlePaymentWebhook(dto: PaymentWebhookDto) {
-    if (!verifyWebhook(dto)) throw new UnauthorizedException('Chu ky webhook khong hop le.');
+    if (!verifyWebhook(dto)) throw new UnauthorizedException('Chữ ký webhook không hợp lệ.');
     const outcome = await this.processPayment({
       orderId: dto.orderId,
       gatewayTxnId: dto.gatewayTxnId,
@@ -209,7 +209,7 @@ export class OrderService {
         .setLock('pessimistic_write')
         .where('o.id = :id', { id: p.orderId })
         .getOne();
-      if (!order) throw new NotFoundException('Khong tim thay don hang.');
+      if (!order) throw new NotFoundException('Không tìm thấy đơn hàng.');
 
       const payment = await manager.save(
         manager.create(Payment, {
@@ -357,7 +357,7 @@ export class OrderService {
       .setLock('pessimistic_write')
       .where('c.id = :id', { id: campaignId })
       .getOne();
-    if (!campaign) throw new NotFoundException('Khong tim thay chien dich.');
+    if (!campaign) throw new NotFoundException('Không tìm thấy chiến dịch.');
     return campaign;
   }
 
