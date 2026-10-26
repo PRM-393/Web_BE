@@ -7,6 +7,22 @@ import { CampaignStore } from '../../entities/campaign-store.entity';
 import { Review } from '../../entities/review.entity';
 import { CampaignStatus, DiscountType, ReviewStatus, VoucherType } from '../../common/enums/status.enum';
 import { LocationDto, SearchVoucherDto, SortOption } from './dto/search-voucher.dto';
+import { DB_TYPE } from '../../config/db-types';
+
+// FR-SEARCH-01: tim khong dau ("phuc long" ra "Phúc Long"). Bo dau tieng Viet ca tu khoa lan du lieu.
+export function foldVietnamese(text: string) {
+  return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase();
+}
+
+// Bang thay ky tu cho ham translate() cua PostgreSQL: moi chu cai co dau (dang dung san NFC) -> chu khong dau.
+const ACCENTED = [...'aăâeêioôơuưy'].flatMap((base) =>
+  ['', '\u0300', '\u0301', '\u0309', '\u0303', '\u0323'].map((tone) => (base + tone).normalize('NFC')),
+).filter((ch, i, all) => all.indexOf(ch) === i && foldVietnamese(ch) !== ch).concat('đ');
+const FOLD_FROM = ACCENTED.join('');
+const FOLD_TO = ACCENTED.map(foldVietnamese).join('');
+
+// MySQL voi collation utf8mb4_unicode_ci da so sanh khong phan biet dau nen chi can LOWER.
+const foldSql = (expr: string) => DB_TYPE === 'mysql' ? `LOWER(${expr})` : `translate(LOWER(${expr}), :foldFrom, :foldTo)`;
 
 export function distanceKm(lat: number, lng: number, toLat: number, toLng: number) {
   const rad = (degrees: number) => degrees * Math.PI / 180;
@@ -72,7 +88,9 @@ export class SearchService {
     const qb = this.publicQuery();
     if (dto.categoryId) qb.andWhere('c.categoryId = :categoryId', { categoryId: dto.categoryId });
     if (dto.keyword?.trim()) {
-      qb.andWhere('(LOWER(c.title) LIKE :kw OR LOWER(brand.name) LIKE :kw)', { kw: '%' + dto.keyword.trim().toLowerCase() + '%' });
+      qb.andWhere(`(${foldSql('c.title')} LIKE :kw OR ${foldSql('brand.name')} LIKE :kw)`, {
+        kw: '%' + foldVietnamese(dto.keyword.trim()) + '%', foldFrom: FOLD_FROM, foldTo: FOLD_TO,
+      });
     }
     if (dto.minPrice !== undefined) qb.andWhere('c.salePrice >= :minPrice', { minPrice: dto.minPrice });
     if (dto.maxPrice !== undefined) qb.andWhere('c.salePrice <= :maxPrice', { maxPrice: dto.maxPrice });
