@@ -74,7 +74,7 @@ export interface TestApp {
   customerToken(userId: string, email: string): Promise<string>;
 }
 
-export async function createTestApp(): Promise<TestApp> {
+export async function createTestApp(beforeInit?: (app: INestApplication, emails: SentMail[]) => void): Promise<TestApp> {
   const dataSource = await createDataSource();
   const emails: SentMail[] = [];
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -85,6 +85,7 @@ export async function createTestApp(): Promise<TestApp> {
     .compile();
   const app = moduleRef.createNestApplication();
   configureApp(app);
+  beforeInit?.(app, emails);
   await app.init();
   const http = request(app.getHttpServer());
   return {

@@ -4,6 +4,7 @@
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
+import { json } from 'express';
 import { createTestApp } from './test-app';
 
 const MAIL_FILE = path.join(__dirname, '..', '..', '.e2e-mail.json');
@@ -11,7 +12,35 @@ const MAIL_FILE = path.join(__dirname, '..', '..', '.e2e-mail.json');
 async function main() {
   process.env.PAYMENT_SIMULATOR = 'true';
   const port = Number(process.argv[2] || 3999);
-  const t = await createTestApp();
+  // DEMO_LOGIN=1: dang nhap bang ten ngan (admin / owner / staff / user) + mat khau 123 de demo tren may local.
+  // Chi map sang tai khoan seed, khong doi quy tac xac thuc cua BE that.
+  const demo = process.env.DEMO_LOGIN === '1';
+  const aliases: Record<string, string> = {
+    admin: 'admin@voucher.local',
+    owner: 'owner@highlands.local',
+    staff: 'staff@highlands.local',
+    user: 'khach@voucher.local',
+  };
+  const t = await createTestApp(
+    demo
+      ? (app, emails) =>
+          app.use('/api/auth', json(), (req: any, _res: any, next: () => void) => {
+            const b = req.body;
+            const alias = b && typeof b.email === 'string' ? aliases[b.email.trim().toLowerCase()] : undefined;
+            if (alias) {
+              b.email = alias;
+              if (b.password === '123') b.password = 'Voucher@123';
+              // khach dang nhap bang OTP: o che do demo nhap ma bat ky 6 so, BE dung ma OTP that vua gui
+              if (req.path === '/otp/verify' && typeof b.otp === 'string') {
+                const last = [...emails].reverse().find((m) => m.to === alias);
+                const code = last && /\b\d{6}\b/.exec(last.text);
+                if (code) b.otp = code[0];
+              }
+            }
+            next();
+          })
+      : undefined,
+  );
   const push = t.emails.push.bind(t.emails);
   t.emails.push = (...mails) => {
     const n = push(...mails);
