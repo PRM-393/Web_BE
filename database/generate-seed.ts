@@ -233,7 +233,7 @@ const tables: [string, Row[]][] = [
     // --- Highlands: khoi luong mau, ngay co dinh, test e2e bam vao ---
     {
       id: id.campPublished, brandId: id.brand, categoryId: id.catCafe, title: 'Voucher 100.000đ chỉ 80.000đ', voucherType: 'PREPAID',
-      description: 'Dùng cho mọi đồ uống tại Highlands', terms: 'Dùng một lần, không hoàn phần dư (BR-03)',
+      description: 'Dùng cho mọi đồ uống tại Highlands', terms: 'Dùng một lần, không hoàn phần dư',
       salePrice: 80000, faceValue: 100000, totalQuantity: 200, soldQuantity: 1, reservedQuantity: 0, limitPerUser: 5,
       saleStartAt: saleStart, saleEndAt: saleEnd, voucherExpireAt: expire, status: 'PUBLISHED',
     },
@@ -269,7 +269,7 @@ const tables: [string, Row[]][] = [
     // Sap ket thuc ban: con 3 ngay nua la het thoi gian ban
     {
       id: id.camp06, brandId: id.brand2, categoryId: id.catCafe, title: 'Phiếu 200.000đ dùng tại Phúc Long', voucherType: 'PREPAID',
-      description: 'Dùng cho mọi đồ uống và bánh tại Phúc Long', terms: 'Dùng một lần, không hoàn phần dư (BR-03)',
+      description: 'Dùng cho mọi đồ uống và bánh tại Phúc Long', terms: 'Dùng một lần, không hoàn phần dư',
       salePrice: 160000, faceValue: 200000, totalQuantity: 150, soldQuantity: 42, reservedQuantity: 0, limitPerUser: 5,
       saleStartAt: vn(-25), saleEndAt: vn(3, '23:59'), voucherExpireAt: addDays(vn(3, '23:59'), 30),
       status: 'PUBLISHED', createdAt: vn(-26, '10:00'),
@@ -350,7 +350,7 @@ const tables: [string, Row[]][] = [
     // APPROVED nhung chua toi ngay ban: job FR-CAMP-10 se tu chuyen sang PUBLISHED
     {
       id: id.camp15, brandId: id.brand5, categoryId: id.catMovie, title: 'Phiếu bắp nước 100.000đ', voucherType: 'PREPAID',
-      description: 'Dùng tại quầy bắp nước của CGV', terms: 'Dùng một lần, không hoàn phần dư (BR-03)',
+      description: 'Dùng tại quầy bắp nước của CGV', terms: 'Dùng một lần, không hoàn phần dư',
       salePrice: 80000, faceValue: 100000, totalQuantity: 350, soldQuantity: 0, reservedQuantity: 0, limitPerUser: 5,
       saleStartAt: vn(2), saleEndAt: vn(92, '23:59'), voucherExpireAt: addDays(vn(92, '23:59'), 35),
       status: 'APPROVED', submittedAt: vn(-2, '15:00'), approvedBy: id.admin, approvedAt: vn(-1, '10:00'),
