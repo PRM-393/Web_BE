@@ -21,10 +21,12 @@ async function main() {
     staff: 'staff@highlands.local',
     user: 'khach@voucher.local',
   };
+  // Boc json() trong ham khac ten: Nest bo qua bo doc JSON toan cuc neu da thay middleware ten 'jsonParser'.
+  const parseJson = json();
   const t = await createTestApp(
     demo
       ? (app, emails) =>
-          app.use('/api/auth', json(), (req: any, _res: any, next: () => void) => {
+          app.use('/api/auth', (req: any, res: any, next: () => void) => parseJson(req, res, next), (req: any, _res: any, next: () => void) => {
             const b = req.body;
             const alias = b && typeof b.email === 'string' ? aliases[b.email.trim().toLowerCase()] : undefined;
             if (alias) {
