@@ -41,6 +41,10 @@ function sqlStatements(file: string) {
 async function createDataSource(): Promise<DataSource> {
   const db = newDb({ autoCreateForeignKeyIndices: true });
   db.public.registerFunction({ name: 'gen_random_uuid', returns: DataType.uuid, implementation: () => crypto.randomUUID(), impure: true });
+  db.public.registerFunction({
+    name: 'translate', args: [DataType.text, DataType.text, DataType.text], returns: DataType.text,
+    implementation: (s: string, from: string, to: string) => s == null ? s : [...s].map((ch) => { const i = [...from].indexOf(ch); return i < 0 ? ch : [...to][i] ?? ''; }).join(''),
+  });
   db.public.registerFunction({ name: 'version', returns: DataType.text, implementation: () => 'PostgreSQL 16' });
   db.public.registerFunction({ name: 'current_database', returns: DataType.text, implementation: () => 'voucher_platform' });
   // Nap dung file SQL giao cho nhom: neu entity va schema.sql lech nhau, cac truy van se loi
@@ -70,7 +74,7 @@ export interface TestApp {
   customerToken(userId: string, email: string): Promise<string>;
 }
 
-export async function createTestApp(): Promise<TestApp> {
+export async function createTestApp(beforeInit?: (app: INestApplication, emails: SentMail[]) => void): Promise<TestApp> {
   const dataSource = await createDataSource();
   const emails: SentMail[] = [];
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -81,6 +85,7 @@ export async function createTestApp(): Promise<TestApp> {
     .compile();
   const app = moduleRef.createNestApplication();
   configureApp(app);
+  beforeInit?.(app, emails);
   await app.init();
   const http = request(app.getHttpServer());
   return {

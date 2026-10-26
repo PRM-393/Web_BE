@@ -194,6 +194,8 @@ CSDL da co du lieu (Neon) can chay them mot lan:
 
 ```sql
 CREATE INDEX IF NOT EXISTS "IDX_cf00847498e2e51564cbc7a799" ON "redeem_tokens" ("otpCode");
+-- F17: anh dai dien luu dang data URL (base64) nen can kieu text
+ALTER TABLE "users" ALTER COLUMN "avatar" TYPE text;
 ```
 
 ## Bien moi truong quan trong

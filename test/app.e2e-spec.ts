@@ -146,6 +146,15 @@ describe('Web_BE e2e (pg-mem)', () => {
     expect(items.map((c: { id: string }) => c.id)).toContain(ID.campPublished);
   });
 
+  it('tim kiem khong dau: "phuc long" va "Phúc Long" ra cung ket qua (FR-SEARCH-01)', async () => {
+    const plain = await http.get('/api/vouchers').query({ keyword: 'phuc long' }).expect(200);
+    const accented = await http.get('/api/vouchers').query({ keyword: 'Phúc Long' }).expect(200);
+    expect(plain.body.data.total).toBeGreaterThan(0);
+    expect(plain.body.data.items.map((c: { id: string }) => c.id)).toEqual(accented.body.data.items.map((c: { id: string }) => c.id));
+    const dong = await http.get('/api/vouchers').query({ keyword: 'tra sua' }).expect(200);
+    expect(dong.body.data.items.some((c: { title: string }) => c.title.includes('Trà sữa'))).toBe(true);
+  });
+
   it('vi cua khach khong lo secretKey (NFR-SEC-05)', async () => {
     const res = await http.get('/api/wallet').set(auth('customer')).expect(200);
     expect(res.body.data).toHaveLength(1);
