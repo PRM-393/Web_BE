@@ -220,6 +220,9 @@ describe('F09 - mua va thanh toan (e2e)', () => {
 
     process.env.PAYMENT_SIMULATOR = 'false';
     await t.http.post(`/api/orders/${o.id}/simulate-payment`).set(auth('oanh')).send({}).expect(403);
+    // khong co khoa payOS va tat gia lap: khong tao don giu cho ma khach khong the thanh toan
+    const blocked = await t.http.post('/api/orders').set(auth('oanh')).send({ campaignId: c.id, quantity: 1 }).expect(503);
+    expect(blocked.body.error.message).toContain('payOS');
 
     process.env.PAYMENT_SIMULATOR = 'true';
     const res = await t.http.post(`/api/orders/${o.id}/simulate-payment`).set(auth('oanh')).send({}).expect(201);

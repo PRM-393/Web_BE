@@ -79,6 +79,6 @@ services:
         value: https://voucher-platform-api.onrender.com/api/orders/payment-return
       - key: PAYOS_CANCEL_URL
         value: https://voucher-platform-api.onrender.com/api/orders/payment-return
-      # Demo do an: cho phep gia lap thanh toan; dat false khi da cau hinh VNPay that
+      # Chi bat (true) khi kiem thu tu dong; khach that luon thanh toan qua payOS
       - key: PAYMENT_SIMULATOR
-        value: "true"
+        value: "false"

@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -30,7 +31,7 @@ import { NotificationService } from '../notification/notification.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { PaymentWebhookDto } from './dto/payment-webhook.dto';
 import { availableStock, isOnSale, refundableUntil, remainingPurchaseQuota, voucherCode } from './order.rules';
-import { PaymentResult, PayosWebhookResult, createPayosLink, newPaymentOrderCode, verifyWebhook } from './payment-gateway';
+import { PaymentResult, PayosWebhookResult, createPayosLink, newPaymentOrderCode, payosConfigured, verifyWebhook } from './payment-gateway';
 
 // Ket qua xu ly mot thong bao thanh toan, dung de tra loi cong va de test
 export type PaymentOutcome =
@@ -59,6 +60,10 @@ export class OrderService {
 
   // ================= Tao don (UC-01 buoc 1-4, FR-ORDER-01..04, BR-01, BR-02, DC-03) =================
   async createOrder(userId: string, dto: CreateOrderDto) {
+    // Khach chi thanh toan qua payOS: chua co khoa payOS thi khong giu cho voucher (PAYMENT_SIMULATOR chi dung cho kiem thu)
+    if (!payosConfigured() && process.env.PAYMENT_SIMULATOR !== 'true') {
+      throw new ServiceUnavailableException('Cổng thanh toán payOS chưa sẵn sàng. Vui lòng thử lại sau.');
+    }
     const order = await this.dataSource.transaction(async (manager) => {
       // Khoa ban ghi chien dich de 2 nguoi mua voucher cuoi cung cung luc khong ban vuot
       const campaign = await this.lockCampaign(manager, dto.campaignId);
@@ -118,7 +123,7 @@ export class OrderService {
     return { order, paymentUrl: await this.ensurePaymentLink(order) };
   }
 
-  // Tao link payOS mot lan cho moi don va luu lai; chua cau hinh payOS -> null (app dung che do gia lap thanh toan)
+  // Tao link payOS mot lan cho moi don va luu lai; loi cong -> null, app cho khach tao lai link (thanh toan lai)
   private async ensurePaymentLink(order: Order): Promise<string | null> {
     if (order.paymentUrl) return order.paymentUrl;
     try {
