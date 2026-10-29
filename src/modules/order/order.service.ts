@@ -31,7 +31,7 @@ import { NotificationService } from '../notification/notification.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { PaymentWebhookDto } from './dto/payment-webhook.dto';
 import { availableStock, isOnSale, refundableUntil, remainingPurchaseQuota, voucherCode } from './order.rules';
-import { PaymentResult, PayosWebhookResult, createPayosLink, newPaymentOrderCode, payosConfigured, verifyWebhook } from './payment-gateway';
+import { PaymentResult, PayosWebhookResult, createPayosLink, fetchPayosPayment, newPaymentOrderCode, payosConfigured, verifyWebhook } from './payment-gateway';
 
 // Ket qua xu ly mot thong bao thanh toan, dung de tra loi cong va de test
 export type PaymentOutcome =
@@ -161,6 +161,40 @@ export class OrderService {
     if (!order) throw new NotFoundException('Không tìm thấy đơn hàng.');
     if (order.userId !== userId) throw new ForbiddenException('Bạn không có quyền xem đơn hàng này.');
     return order;
+  }
+
+  // FR-ORDER-05: app hoi trang thai don dang cho thanh toan -> may chu hoi lai payOS (toi da 1 lan / 4 giay / don).
+  // Webhook van la duong chinh; cach nay giup don cap nhat ca khi webhook khong toi (may ca nhan) hoac bi tre.
+  // Cung gatewayTxnId voi webhook nen neu ca hai cung den thi lan sau bi bo qua (DC-04).
+  private readonly lastPayosSync = new Map<string, number>();
+
+  async findMyOrderSynced(userId: string, orderId: string) {
+    const order = await this.findMyOrder(userId, orderId);
+    if (order.status !== OrderStatus.PENDING || !order.paymentUrl || !payosConfigured()) return order;
+    const last = this.lastPayosSync.get(order.id) ?? 0;
+    if (Date.now() - last < 4000) return order;
+    this.lastPayosSync.set(order.id, Date.now());
+    try {
+      const info = await fetchPayosPayment(String(order.paymentOrderCode));
+      if (info?.status === 'PAID') {
+        await this.processPayment({
+          orderId: order.id,
+          gatewayTxnId: `PAYOS-${info.reference ?? order.paymentOrderCode}`,
+          amount: info.amountPaid,
+          success: true,
+          raw: info.raw,
+        });
+      } else if (info?.status === 'CANCELLED') {
+        await this.processPayment({
+          orderId: order.id, gatewayTxnId: `PAYOS-CANCEL-${order.paymentOrderCode}`, amount: 0, success: false, raw: info.raw,
+        });
+      } else return order;
+      this.lastPayosSync.delete(order.id);
+      return this.findMyOrder(userId, orderId);
+    } catch (e) {
+      this.logger.warn(`Khong hoi duoc trang thai payOS cho don ${order.id}: ${(e as Error).message}`);
+      return order;
+    }
   }
 
   // ================= Nhan ket qua thanh toan (FR-ORDER-05..08, BR-11, BR-18, BR-20, DC-04, DC-11) =================

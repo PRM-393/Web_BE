@@ -91,6 +91,36 @@ export async function createPayosLink(o: { orderCode: string; amount: number; ex
   return json.data.checkoutUrl;
 }
 
+// Hoi payOS trang thai link thanh toan: GET {PAYOS_API_URL}/v2/payment-requests/{orderCode}.
+// Dung khi webhook khong toi duoc may chu (chay tren may ca nhan) hoac den cham. Goi may chu -> payOS co khoa API
+// nen ket qua tin cay nhu webhook.
+export interface PayosPaymentInfo {
+  status: string; // PENDING | PROCESSING | PAID | CANCELLED | EXPIRED
+  amountPaid: number;
+  reference: string | null;
+  raw: Record<string, unknown>;
+}
+
+export async function fetchPayosPayment(orderCode: string): Promise<PayosPaymentInfo | null> {
+  if (!payosConfigured()) return null;
+  const res = await fetch(`${env('PAYOS_API_URL', 'https://api-merchant.payos.vn')}/v2/payment-requests/${orderCode}`, {
+    headers: { 'x-client-id': env('PAYOS_CLIENT_ID'), 'x-api-key': env('PAYOS_API_KEY') },
+    signal: AbortSignal.timeout(10000),
+  });
+  const json = (await res.json().catch(() => ({}))) as {
+    code?: string;
+    desc?: string;
+    data?: { status?: string; amountPaid?: number; transactions?: { reference?: string }[] };
+  };
+  if (json.code !== '00' || !json.data?.status) throw new Error(`payOS: ${json.desc || res.status}`);
+  return {
+    status: json.data.status,
+    amountPaid: Number(json.data.amountPaid ?? 0),
+    reference: json.data.transactions?.[0]?.reference ?? null,
+    raw: json as Record<string, unknown>,
+  };
+}
+
 // Xac thuc webhook payOS (BR-18); null neu thieu du lieu hoac chu ky sai
 export function parsePayosWebhook(body: {
   code?: string;

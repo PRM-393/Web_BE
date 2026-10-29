@@ -52,7 +52,7 @@ export class OrderController {
   @Roles(Role.CUSTOMER)
   @Get('orders/:id')
   myOrder(@CurrentUser() user: CurrentUserPayload, @Param('id', ParseUUIDPipe) id: string) {
-    return this.orderService.findMyOrder(user.userId, id);
+    return this.orderService.findMyOrderSynced(user.userId, id);
   }
 
   // FR-ORDER-12: thanh toan lai don PENDING con trong 15 phut
