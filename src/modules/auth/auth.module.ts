@@ -17,6 +17,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, MailService],
-  exports: [AuthService],
+  // MailService duoc export de BrandService gui email duyet / tu choi ho so (FR-BRAND-03, ASM-05)
+  exports: [AuthService, MailService],
 })
 export class AuthModule {}

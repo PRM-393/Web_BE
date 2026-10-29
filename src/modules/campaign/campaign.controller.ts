@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CampaignService } from './campaign.service';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
 import { UpdateCampaignDto } from './dto/update-campaign.dto';
+import { RejectCampaignDto } from './dto/reject-campaign.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { BrandResourceGuard } from '../../common/guards/brand-resource.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -60,6 +61,13 @@ export class CampaignController {
     return this.campaignService.resume(id);
   }
 
+  // FR-CAMP-15: mo lai chien dich da ket thuc -> ve DRAFT de sua ngay ban roi gui duyet lai
+  @Roles(Role.BRAND_OWNER)
+  @Patch(':id/reopen')
+  reopen(@Param('id') id: string) {
+    return this.campaignService.reopen(id);
+  }
+
   @Roles(Role.ADMIN)
   @Get('pending')
   pending() {
@@ -72,10 +80,11 @@ export class CampaignController {
     return this.campaignService.approve(id, user.userId);
   }
 
+  // UC-04 luong 3a: tu choi bat buoc kem ly do (RejectCampaignDto), chien dich quay ve DRAFT
   @Roles(Role.ADMIN)
   @Patch(':id/reject')
-  reject(@Param('id') id: string, @Body('reason') reason: string) {
-    return this.campaignService.reject(id, reason);
+  reject(@Param('id') id: string, @Body() dto: RejectCampaignDto) {
+    return this.campaignService.reject(id, dto.reason);
   }
 
   @Roles(Role.BRAND_OWNER, Role.ADMIN)

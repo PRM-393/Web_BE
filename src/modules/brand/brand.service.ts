@@ -1,7 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, MoreThan, Repository } from 'typeorm';
 import { AuthService } from '../auth/auth.service';
+import { MailService } from '../auth/mail.service';
 import { RefreshToken } from '../../entities/refresh-token.entity';
 import { Brand } from '../../entities/brand.entity';
 import { Store } from '../../entities/store.entity';
@@ -18,6 +19,7 @@ import { Review } from '../../entities/review.entity';
 import { Favorite } from '../../entities/favorite.entity';
 
 import { CreateBrandDto } from './dto/create-brand.dto';
+import { RegisterBrandDto } from './dto/register-brand.dto';
 import { CreateStoreDto } from './dto/create-store.dto';
 import { UpdateStoreDto } from './dto/update-store.dto';
 import { CreateStaffDto } from './dto/create-staff.dto';
@@ -32,6 +34,8 @@ export function assertStoreCoordinates(store: { status?: boolean; latitude?: num
 
 @Injectable()
 export class BrandService {
+  private readonly logger = new Logger(BrandService.name);
+
   constructor(
     @InjectRepository(Brand) private readonly brandRepo: Repository<Brand>,
     @InjectRepository(Store) private readonly storeRepo: Repository<Store>,
@@ -43,6 +47,7 @@ export class BrandService {
     @InjectRepository(VoucherCampaign) private readonly campaignRepo: Repository<VoucherCampaign>,
     @InjectRepository(VoucherItem) private readonly voucherItemRepo: Repository<VoucherItem>,
     private readonly authService: AuthService,
+    private readonly mail: MailService,
   ) {}
 
   // FR-BRAND-01/02: ho so moi o trang thai cho duyet
@@ -55,6 +60,63 @@ export class BrandService {
     return this.brandRepo.save(brand);
   }
 
+  // FR-BRAND-01 / FR-BRAND-02 / UC-06 buoc 1: doanh nghiep tu dang ky khi chua co tai khoan.
+  // Tao User vai tro BRAND_OWNER o trang thai PENDING_ACTIVATION + Brand PENDING, roi gui lien ket
+  // dat mat khau. Hai viec nay di cung nhau: duyet ho so xong ma khong dang nhap duoc thi vo nghia.
+  // Lam theo dung mau cua assignStaff() de chi co mot cach tao tai khoan cho kich hoat trong repo.
+  async registerBrand(dto: RegisterBrandDto) {
+    const email = dto.ownerEmail.trim().toLowerCase();
+    const { ownerEmail, ownerFullName, ownerPhone, ...brandFields } = dto;
+
+    let user = await this.userRepo.findOne({ where: { email } });
+    if (user && user.role !== Role.BRAND_OWNER) {
+      throw new BadRequestException('Email đã thuộc tài khoản có vai trò khác.');
+    }
+    if (user) {
+      // Da co chu thuong hieu: khong cho dang ky them ho so thu hai qua duong cong khai nay,
+      // nguoi dung phai dang nhap roi dung POST /brands (NFR-SEC-03).
+      const existing = await this.brandRepo.findOne({ where: { ownerUserId: user.id } });
+      if (existing) {
+        throw new BadRequestException(
+          'Email này đã đăng ký hồ sơ thương hiệu. Vui lòng đăng nhập để xem trạng thái duyệt.',
+        );
+      }
+    } else {
+      user = await this.userRepo.save(
+        this.userRepo.create({
+          email,
+          fullName: ownerFullName.trim(),
+          phone: ownerPhone?.trim(),
+          role: Role.BRAND_OWNER,
+          status: UserStatus.PENDING_ACTIVATION,
+        }),
+      );
+    }
+
+    const brand = await this.brandRepo.save(
+      this.brandRepo.create({ ...brandFields, ownerUserId: user.id, status: BrandStatus.PENDING }),
+    );
+
+    // Lien ket dat mat khau chi gui khi tai khoan chua kich hoat; sendActivation tu kiem dieu do.
+    // Gui that bai khong duoc xoa ho so vua tao: nguoi dung bam lai "gui lai lien ket" o man dang nhap.
+    try {
+      await this.authService.sendActivation(user.email);
+    } catch (error) {
+      this.logger.warn(
+        `Khong gui duoc lien ket dat mat khau cho ${user.email}: ` +
+          (error instanceof Error ? error.message : String(error)),
+      );
+    }
+
+    return {
+      brandId: brand.id,
+      status: brand.status,
+      message:
+        'Đã nhận hồ sơ thương hiệu. Vui lòng kiểm tra email để đặt mật khẩu. ' +
+        'Hồ sơ sẽ được quản trị viên xét duyệt.',
+    };
+  }
+
   findMyBrands(ownerUserId: string) {
     return this.brandRepo.find({ where: { ownerUserId } });
   }
@@ -65,19 +127,79 @@ export class BrandService {
     return brand;
   }
 
-  // FR-BRAND-03: quan tri vien duyet/tu choi - TODO: gui email thong bao (ASM-05)
-  async approve(id: string) {
+  // FR-BRAND-03 / UC-06: quan tri vien duyet ho so -> gui email bao va ghi AuditLog (NFR-SEC-07)
+  async approve(id: string, actorUserId: string) {
     const brand = await this.findOneOrFail(id);
+    if (brand.status !== BrandStatus.PENDING) {
+      throw new BadRequestException('Chỉ có thể duyệt hồ sơ đang chờ duyệt.');
+    }
     brand.status = BrandStatus.APPROVED;
     brand.approvedAt = new Date();
-    return this.brandRepo.save(brand);
+    const saved = await this.brandRepo.save(brand);
+
+    await this.writeAuditLog(actorUserId, 'APPROVE_BRAND', id, { name: saved.name });
+    await this.notifyOwner(
+      saved,
+      'Hồ sơ thương hiệu đã được duyệt',
+      `Hồ sơ thương hiệu "${saved.name}" đã được duyệt. ` +
+        'Bạn có thể đăng nhập vào cổng thương hiệu để tạo chi nhánh và chiến dịch voucher.',
+    );
+    return saved;
   }
 
-  async reject(id: string, reason: string) {
+  // FR-BRAND-03 / UC-06 luong 3a: tu choi kem ly do, ly do duoc gui vao email cho chu thuong hieu
+  async reject(id: string, reason: string, actorUserId: string) {
     const brand = await this.findOneOrFail(id);
+    if (brand.status !== BrandStatus.PENDING) {
+      throw new BadRequestException('Chỉ có thể từ chối hồ sơ đang chờ duyệt.');
+    }
     brand.status = BrandStatus.REJECTED;
-    brand.rejectReason = reason;
-    return this.brandRepo.save(brand);
+    brand.rejectReason = reason.trim();
+    const saved = await this.brandRepo.save(brand);
+
+    await this.writeAuditLog(actorUserId, 'REJECT_BRAND', id, { name: saved.name, reason: saved.rejectReason });
+    await this.notifyOwner(
+      saved,
+      'Hồ sơ thương hiệu chưa được duyệt',
+      `Hồ sơ thương hiệu "${saved.name}" chưa được duyệt. Lý do: ${saved.rejectReason}. ` +
+        'Vui lòng bổ sung rồi gửi lại hồ sơ.',
+    );
+    return saved;
+  }
+
+  // NFR-SEC-07: moi thao tac quan tri tren ho so thuong hieu deu phai truy duoc ai lam, luc nao
+  private async writeAuditLog(
+    actorUserId: string | null,
+    action: string,
+    brandId: string,
+    detail: Record<string, unknown>,
+  ) {
+    await this.brandRepo.manager.save(
+      AuditLog,
+      this.brandRepo.manager.create(AuditLog, {
+        actorUserId: actorUserId ?? null,
+        action,
+        entityType: 'Brand',
+        entityId: brandId,
+        detail,
+      }),
+    );
+  }
+
+  // ASM-05: bao ket qua duyet ho so qua email. Trang thai thuong hieu DA luu truoc khi goi day,
+  // nen SMTP chua cau hinh hoac gui that bai chi duoc ghi nhat ky - khong duoc lam hong ca thao tac
+  // duyet roi de thuong hieu ket o trang thai cu.
+  private async notifyOwner(brand: Brand, subject: string, body: string) {
+    try {
+      const owner = await this.userRepo.findOne({ where: { id: brand.ownerUserId } });
+      if (!owner?.email) return;
+      await this.mail.send(owner.email, subject, body);
+    } catch (error) {
+      this.logger.warn(
+        `Khong gui duoc email "${subject}" cho chu thuong hieu ${brand.id}: ` +
+          (error instanceof Error ? error.message : String(error)),
+      );
+    }
   }
 
   // FR-BRAND-09: danh sach thuong hieu cho quan tri (loc theo trang thai)

@@ -4,6 +4,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { AuthService } from '../auth/auth.service';
+import { MailService } from '../auth/mail.service';
 import { BrandService, assertStoreCoordinates } from './brand.service';
 import { Brand } from '../../entities/brand.entity';
 import { Store } from '../../entities/store.entity';
@@ -14,7 +15,7 @@ import { CampaignStore } from '../../entities/campaign-store.entity';
 import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
 import { VoucherItem } from '../../entities/voucher-item.entity';
 import { Role } from '../../common/enums/role.enum';
-import { UserStatus, VoucherItemStatus } from '../../common/enums/status.enum';
+import { BrandStatus, UserStatus, VoucherItemStatus } from '../../common/enums/status.enum';
 
 function storeOf(overrides: Partial<Store> = {}): Store {
   return {
@@ -37,10 +38,11 @@ interface Fixture {
   campaigns?: Partial<VoucherCampaign>[];
   staff?: Partial<StaffAssignment>[];
   user?: Partial<User> | null;
+  brand?: Partial<Brand> | null;
 }
 
 function buildService(fixture: Fixture = {}) {
-  const saved: Record<string, unknown[]> = { store: [], staff: [], user: [] };
+  const saved: Record<string, unknown[]> = { store: [], staff: [], user: [], brand: [], audit: [] };
 
   const storeRepo = {
     findOne: jest.fn().mockResolvedValue(fixture.store === undefined ? storeOf() : fixture.store),
@@ -79,12 +81,19 @@ function buildService(fixture: Fixture = {}) {
 
   const sessionRepo = { update: jest.fn().mockResolvedValue({ affected: 2 }) } as unknown as Repository<RefreshToken>;
   const brandRepo = {
-    findOne: jest.fn(),
-    save: jest.fn(),
-    create: jest.fn(),
+    findOne: jest.fn().mockResolvedValue(fixture.brand === undefined ? null : fixture.brand),
+    save: jest.fn((entity) => (saved.brand.push(entity), Promise.resolve(entity))),
+    create: jest.fn((entity) => ({ id: 'brand-1', ...entity })),
     find: jest.fn(),
+    // AuditLog duoc ghi qua manager dung chung (NFR-SEC-07) nen phai gia lap ca no
+    manager: {
+      create: jest.fn((_entity, data) => data),
+      save: jest.fn((_entity, data) => (saved.audit.push(data), Promise.resolve(data))),
+    },
   } as unknown as Repository<Brand>;
   const authService = { sendActivation: jest.fn().mockResolvedValue({}) } as unknown as AuthService;
+  // FR-BRAND-03: duyet / tu choi ho so gui email cho chu thuong hieu (T10)
+  const mail = { send: jest.fn().mockResolvedValue(undefined) } as unknown as MailService;
 
   const service = new BrandService(
     brandRepo,
@@ -96,8 +105,9 @@ function buildService(fixture: Fixture = {}) {
     campaignRepo,
     voucherItemRepo,
     authService,
+    mail,
   );
-  return { service, storeRepo, staffRepo, userRepo, sessionRepo, voucherItemRepo, authService, saved };
+  return { service, brandRepo, storeRepo, staffRepo, userRepo, sessionRepo, voucherItemRepo, authService, mail, saved };
 }
 
 describe('DC-05 - chi nhanh dang hoat dong bat buoc co toa do', () => {
@@ -292,5 +302,107 @@ describe('FR-BRAND-06 / FR-AUTH-10 - vo hieu hoa nhan vien', () => {
   it('khong tim thay nhan vien thi bao 404', async () => {
     const { service } = buildService();
     await expect(service.deactivateStaff('khong-co')).rejects.toThrow(NotFoundException);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T9 / T10 - dang ky ho so va duyet / tu choi (F07)
+// ---------------------------------------------------------------------------
+
+const ownerUser: Partial<User> = {
+  id: 'user-1',
+  email: 'owner@brand.vn',
+  role: Role.BRAND_OWNER,
+  status: UserStatus.PENDING_ACTIVATION,
+};
+
+const registerDto = {
+  name: 'Ca phe Thu Bay',
+  ownerEmail: 'Owner@Brand.VN',
+  ownerFullName: 'Nguyen Van A',
+  contactInfo: '0901234567',
+};
+
+describe('FR-BRAND-01 / FR-BRAND-02 - doanh nghiep tu dang ky ho so', () => {
+  it('tao chu thuong hieu PENDING_ACTIVATION + ho so PENDING va gui lien ket dat mat khau', async () => {
+    const { service, authService, saved } = buildService({ user: null, brand: null });
+
+    const result = await service.registerBrand(registerDto);
+
+    // Email chuan hoa ve chu thuong de lan sau dang nhap khong bi lech hoa / thuong
+    expect(saved.user[0]).toMatchObject({
+      email: 'owner@brand.vn',
+      fullName: 'Nguyen Van A',
+      role: Role.BRAND_OWNER,
+      status: UserStatus.PENDING_ACTIVATION,
+    });
+    expect(saved.brand[0]).toMatchObject({ name: 'Ca phe Thu Bay', ownerUserId: 'user-1', status: BrandStatus.PENDING });
+    // Cac truong cua chu tai khoan khong duoc lot vao bang brands
+    expect(saved.brand[0]).not.toHaveProperty('ownerEmail');
+    expect(authService.sendActivation).toHaveBeenCalledWith('owner@brand.vn');
+    expect(result.status).toBe(BrandStatus.PENDING);
+  });
+
+  it('email da thuoc vai tro khac thi tu choi', async () => {
+    const { service } = buildService({ user: { ...ownerUser, role: Role.CUSTOMER } });
+    await expect(service.registerBrand(registerDto)).rejects.toThrow(BadRequestException);
+  });
+
+  it('email da co ho so thi khong cho dang ky them qua duong cong khai', async () => {
+    const { service } = buildService({ user: ownerUser, brand: { id: 'brand-1' } });
+    await expect(service.registerBrand(registerDto)).rejects.toThrow(BadRequestException);
+  });
+
+  it('gui email that bai van giu ho so vua tao, khong lam hong ca thao tac dang ky', async () => {
+    const { service, authService, saved } = buildService({ user: null, brand: null });
+    (authService.sendActivation as jest.Mock).mockRejectedValue(new Error('SMTP chua cau hinh'));
+
+    await expect(service.registerBrand(registerDto)).resolves.toMatchObject({ status: BrandStatus.PENDING });
+    expect(saved.brand).toHaveLength(1);
+  });
+});
+
+describe('FR-BRAND-03 / UC-06 - duyet va tu choi ho so thuong hieu', () => {
+  // Ham, khong phai hang: service gan truc tiep len doi tuong duoc tra ve nen dung chung se lay nhiem ca sau
+
+  const pending = () => ({ id: 'brand-1', name: 'Ca phe Thu Bay', ownerUserId: 'user-1', status: BrandStatus.PENDING });
+
+  it('duyet: doi trang thai, ghi AuditLog va gui email cho chu thuong hieu', async () => {
+    const { service, mail, saved } = buildService({ brand: pending(), user: ownerUser });
+
+    const result = await service.approve('brand-1', 'admin-1');
+
+    expect(result.status).toBe(BrandStatus.APPROVED);
+    expect(result.approvedAt).toBeInstanceOf(Date);
+    expect(saved.audit[0]).toMatchObject({ action: 'APPROVE_BRAND', entityId: 'brand-1', actorUserId: 'admin-1' });
+    expect(mail.send).toHaveBeenCalledWith('owner@brand.vn', expect.stringContaining('duyệt'), expect.any(String));
+  });
+
+  it('tu choi: luu ly do, ghi AuditLog va dua ly do vao email', async () => {
+    const { service, mail, saved } = buildService({ brand: pending(), user: ownerUser });
+
+    const result = await service.reject('brand-1', '  Giay phep khong khop ten  ', 'admin-1');
+
+    expect(result.status).toBe(BrandStatus.REJECTED);
+    expect(result.rejectReason).toBe('Giay phep khong khop ten');
+    expect(saved.audit[0]).toMatchObject({ action: 'REJECT_BRAND', entityId: 'brand-1' });
+    expect((mail.send as jest.Mock).mock.calls[0][2]).toContain('Giay phep khong khop ten');
+  });
+
+  it('chi duyet / tu choi duoc ho so dang cho duyet', async () => {
+    const daDuyet = { ...pending(), status: BrandStatus.APPROVED };
+    await expect(buildService({ brand: daDuyet }).service.approve('brand-1', 'admin-1')).rejects.toThrow(
+      BadRequestException,
+    );
+    await expect(buildService({ brand: daDuyet }).service.reject('brand-1', 'Ly do day du', 'admin-1')).rejects.toThrow(
+      BadRequestException,
+    );
+  });
+
+  it('SMTP hong khong lam hong thao tac duyet - trang thai da luu van giu nguyen', async () => {
+    const { service, mail } = buildService({ brand: pending(), user: ownerUser });
+    (mail.send as jest.Mock).mockRejectedValue(new Error('SMTP chua cau hinh'));
+
+    await expect(service.approve('brand-1', 'admin-1')).resolves.toMatchObject({ status: BrandStatus.APPROVED });
   });
 });

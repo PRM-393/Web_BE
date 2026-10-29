@@ -20,3 +20,18 @@ export function envInt(name: string, fallback: number): number {
   const v = parseInt(process.env[name] || '', 10);
   return Number.isFinite(v) && v > 0 ? v : fallback;
 }
+
+// FR-SETTLE-03 / BR-25: moc dau va cuoi cua ky doi soat = thang TRUOC tinh theo lich Viet Nam.
+// Khong dung new Date(nam, thang, ngay): ham do dung lich cuc bo cua may chu, tren Render (UTC)
+// se chot nham sang thang khac trong 7 gio dau moi ngay.
+export function vietnamMonthPeriod(now = new Date()): { periodStart: Date; periodEnd: Date } {
+  const vnNow = new Date(now.getTime() + VN_OFFSET_MS);
+  const year = vnNow.getUTCFullYear();
+  const month = vnNow.getUTCMonth(); // 0-11 theo lich VN; Date.UTC tu xu ly khi lui qua nam truoc
+  return {
+    // 00:00:00 gio VN ngay 01 thang truoc
+    periodStart: new Date(Date.UTC(year, month - 1, 1) - VN_OFFSET_MS),
+    // 23:59:59.999 gio VN ngay cuoi thang truoc = ngay 01 thang nay tru mot mili giay
+    periodEnd: new Date(Date.UTC(year, month, 1) - VN_OFFSET_MS - 1),
+  };
+}

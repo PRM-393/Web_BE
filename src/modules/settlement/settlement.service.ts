@@ -8,8 +8,26 @@ import { AuditLog } from '../../entities/audit-log.entity';
 import { Brand } from '../../entities/brand.entity';
 import { VoucherItem } from '../../entities/voucher-item.entity';
 import { VoucherCampaign } from '../../entities/voucher-campaign.entity';
-import { OrderStatus, SettlementStatus, VoucherItemStatus } from '../../common/enums/status.enum';
+import { RefundRequest } from '../../entities/refund-request.entity';
+import {
+  OrderStatus,
+  RefundRequestStatus,
+  SettlementStatus,
+  VoucherItemStatus,
+} from '../../common/enums/status.enum';
 import { SetCommissionDto } from './dto/set-commission.dto';
+import { MarkPaidDto } from './dto/mark-paid.dto';
+import { RunSettlementDto } from './dto/run-settlement.dto';
+import { vietnamMonthPeriod } from '../../common/utils/vn-time';
+
+// BR-14 / DC-13: voucher con mot yeu cau hoan tien o cac trang thai nay thi chua chot duoc.
+// REJECTED / COMPLETED / FAILED deu da nga ngu nen khong chan: COMPLETED thi voucher da sang
+// REFUNDED va bi loai boi bo loc trang thai (BR-13), hai cai con lai tra voucher ve ACTIVE.
+export const OPEN_REFUND_STATUSES = [
+  RefundRequestStatus.REQUESTED,
+  RefundRequestStatus.PROCESSING,
+  RefundRequestStatus.MANUAL_PENDING,
+];
 
 // Khoa cau hinh dung chung voi F09: order.service doc cung key nay luc thanh toan de chot ty le vao don
 export const COMMISSION_RATE_KEY = 'commission_rate';
@@ -111,9 +129,10 @@ export class SettlementService {
     return DEFAULT_COMMISSION_RATE;
   }
 
-  // UC-05, FR-SETTLE-02..08, BR-09, BR-14, BR-15
-  // TODO: lich chay dinh ky dau thang qua @nestjs/schedule Cron (xem settlement.scheduler.ts)
-  async runMonthlySettlement(periodStart: Date, periodEnd: Date) {
+  // UC-05, FR-SETTLE-02..08, BR-09, BR-14, BR-15.
+  // Lich chay dinh ky 01:00 ngay 01 hang thang gio VN nam o settlement.scheduler.ts (FR-SETTLE-03).
+  // actorUserId: quan tri vien bam chay tay; tac vu nen truyen null.
+  async runMonthlySettlement(periodStart: Date, periodEnd: Date, actorUserId: string | null = null) {
     const brands = await this.brandRepo.find();
     const currentRate = await this.getCommissionRate();
     const createdSettlements: Settlement[] = [];
@@ -137,6 +156,13 @@ export class SettlementService {
           done: [VoucherItemStatus.USED, VoucherItemStatus.EXPIRED],
           cutoff: new Date(Math.min(Date.now(), periodEnd.getTime())),
         })
+        // BR-14 / DC-13: con yeu cau hoan tien dang xu ly thi chua chot. Bo loc refundableUntil o tren
+        // bat duoc phan lon ca, nhung mot yeu cau MANUAL_PENDING (hoan tay) co the keo dai qua han do -
+        // chot vao phieu roi moi hoan thi so lieu da chi tra cho thuong hieu bi sai.
+        .leftJoin(RefundRequest, 'rr', 'rr.voucherItemId = v.id AND rr.status IN (:...openRefunds)', {
+          openRefunds: OPEN_REFUND_STATUSES,
+        })
+        .andWhere('rr.id IS NULL')
         // chua thuoc phieu nao: LEFT JOIN ... IS NULL chay giong nhau tren PostgreSQL va MySQL
         .leftJoin(SettlementItem, 'si', 'si.voucherItemId = v.id')
         .andWhere('si.id IS NULL')
@@ -181,7 +207,39 @@ export class SettlementService {
       createdSettlements.push(settlement);
     }
 
+    // NFR-SEC-07: ghi lai moi lan chot ky. Chay tay thi co nguoi thuc hien, tac vu nen thi actorUserId
+    // la null - van phai ghi de con doi chieu khi so lieu mot ky bi thac mac.
+    await this.auditLogRepo.save(
+      this.auditLogRepo.create({
+        actorUserId: actorUserId ?? null,
+        action: 'RUN_SETTLEMENT',
+        entityType: 'SettlementPeriod',
+        // audit_logs.entityId la NOT NULL va mot luot chot sinh nhieu phieu, nen lay chinh ky lam khoa:
+        // index (entityType, entityId) gom duoc moi lan chay lai cua cung mot ky vao mot cho.
+        entityId: `${periodStart.toISOString().slice(0, 10)}..${periodEnd.toISOString().slice(0, 10)}`,
+        detail: {
+          periodStart: periodStart.toISOString(),
+          periodEnd: periodEnd.toISOString(),
+          bySchedule: actorUserId === null,
+          createdCount: createdSettlements.length,
+          settlementIds: createdSettlements.map((s) => s.id),
+        },
+      }),
+    );
+
     return createdSettlements;
+  }
+
+  // FR-SETTLE-03: quan tri vien chay chot bang tay. Chay lai cung mot ky khong sinh phieu trung nho
+  // bo loc "chua thuoc phieu nao" trong runMonthlySettlement (DC-06).
+  async runManually(dto: RunSettlementDto, actorUserId: string) {
+    const fallback = vietnamMonthPeriod();
+    const periodStart = dto.periodStart ? new Date(dto.periodStart) : fallback.periodStart;
+    const periodEnd = dto.periodEnd ? new Date(dto.periodEnd) : fallback.periodEnd;
+    if (periodStart.getTime() >= periodEnd.getTime()) {
+      throw new BadRequestException('Ngày cuối kỳ phải sau ngày đầu kỳ.');
+    }
+    return this.runMonthlySettlement(periodStart, periodEnd, actorUserId);
   }
 
   // FR-SETTLE-07: quan tri vien xem tat ca phieu doi soat de chi tra
@@ -203,16 +261,43 @@ export class SettlementService {
     return settlement;
   }
 
-  // FR-SETTLE-07: quan tri vien danh dau da chi tra kem ma giao dich
-  async markPaid(id: string, bankTxnRef: string) {
+  // FR-SETTLE-07: quan tri vien danh dau da chi tra kem ngay chuyen va ma giao dich ngan hang.
+  // Ca hai deu bat buoc (DTO kiem) - thieu ma giao dich thi khi thuong hieu thac mac khong tra duoc
+  // lenh chuyen tien nao ung voi phieu nay.
+  async markPaid(id: string, dto: MarkPaidDto, actorUserId: string) {
     const settlement = await this.findOneOrFail(id);
     if (settlement.status === SettlementStatus.PAID) {
       throw new BadRequestException('Phiếu đối soát đã được chi trả.');
     }
+    const paidAt = new Date(dto.paidAt);
+    if (Number.isNaN(paidAt.getTime())) {
+      throw new BadRequestException('Ngày chi trả không hợp lệ.');
+    }
+    // Khong nhan ngay o tuong lai: ngay chi tra la ngay lenh chuyen da thuc hien
+    if (paidAt.getTime() > Date.now()) {
+      throw new BadRequestException('Ngày chi trả không được ở tương lai.');
+    }
     settlement.status = SettlementStatus.PAID;
-    settlement.paidAt = new Date();
-    settlement.bankTxnRef = bankTxnRef;
-    return this.settlementRepo.save(settlement);
+    settlement.paidAt = paidAt;
+    settlement.bankTxnRef = dto.bankTxnRef.trim();
+    const saved = await this.settlementRepo.save(settlement);
+
+    // NFR-SEC-07: chi tra la thao tac dung toi tien, phai truy duoc ai bam va bam luc nao
+    await this.auditLogRepo.save(
+      this.auditLogRepo.create({
+        actorUserId: actorUserId ?? null,
+        action: 'MARK_SETTLEMENT_PAID',
+        entityType: 'Settlement',
+        entityId: saved.id,
+        detail: {
+          brandId: saved.brandId,
+          payableAmount: saved.payableAmount,
+          paidAt: paidAt.toISOString(),
+          bankTxnRef: saved.bankTxnRef,
+        },
+      }),
+    );
+    return saved;
   }
 
   async detail(id: string) {
