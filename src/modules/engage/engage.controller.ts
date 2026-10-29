@@ -13,7 +13,11 @@ import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current
 
 @ApiTags('engage')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard, BrandResourceGuard)
+// BrandResourceGuard khong gan o cap class: no doi chieu :brandId / :id voi thuong hieu cua nguoi goi,
+// trong khi danh sach danh gia cua mot thuong hieu la du lieu CONG KHAI (F06 / F15). Gan ca cum thi
+// mot tai khoan BRAND_OWNER xem trang thuong hieu khac bi 403 - chan thua, khong phai lo hong.
+// Chi route sua du lieu cua thuong hieu (tra loi danh gia) moi can guard do.
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller()
 export class EngageController {
   constructor(
@@ -27,6 +31,8 @@ export class EngageController {
     return this.reviewService.create(user.userId, dto);
   }
 
+  // NFR-SEC-03: chi tra loi duoc danh gia thuoc chien dich cua chinh minh
+  @UseGuards(BrandResourceGuard)
   @Roles(Role.BRAND_OWNER)
   @Patch('reviews/:id/reply')
   reply(@Param('id') id: string, @Body() dto: ReplyReviewDto) {

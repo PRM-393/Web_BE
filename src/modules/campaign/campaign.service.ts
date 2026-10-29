@@ -198,10 +198,37 @@ export class CampaignService {
     return this.findOneOrFail(saved.id);
   }
 
+  // UC-04 luong 3a: tu choi -> ve DRAFT kem ly do de thuong hieu sua roi gui lai.
+  // Ly do bat buoc, kiem o RejectCampaignDto.
   async reject(id: string, reason: string) {
     const campaign = await this.findOneOrFail(id);
+    // Doi xung voi approve(): chi chien dich dang cho duyet moi tu choi duoc. Thieu buoc nay thi
+    // mot chien dich dang ban bi bam nham "tu choi" se roi thang ve DRAFT, bien mat khoi app.
+    if (campaign.status !== CampaignStatus.PENDING) {
+      throw new BadRequestException('Chỉ có thể từ chối chiến dịch đang chờ duyệt.');
+    }
     campaign.status = CampaignStatus.DRAFT;
-    campaign.rejectReason = reason;
+    campaign.submittedAt = null;
+    campaign.rejectReason = reason.trim();
+    return this.campaignRepo.save(campaign);
+  }
+
+  // FR-CAMP-15: mo lai chien dich da ket thuc. Tac vu nen chuyen ENDED khi het thoi gian ban va
+  // NEEDS_REAPPROVAL khong co ENDED, nen truoc day ket thuc la het duong quay lai: sua ngay xong
+  // chien dich van ENDED, khong ban lai duoc, thuong hieu phai tao lai tu dau.
+  // Dua ve DRAFT (khong phai PUBLISHED) de thuong hieu con phai sua lai ngay ban roi gui duyet lai.
+  async reopen(id: string) {
+    const campaign = await this.findOneOrFail(id);
+    if (campaign.status !== CampaignStatus.ENDED) {
+      throw new BadRequestException('Chỉ có thể mở lại chiến dịch đã kết thúc.');
+    }
+    const brand = await this.brandRepo.findOne({ where: { id: campaign.brandId } });
+    // BR-26: thuong hieu chua duyet hoac dang bi dinh chi thi khong duoc dua chien dich tro lai
+    if (brand?.status !== BrandStatus.APPROVED) {
+      throw new BadRequestException('Thương hiệu chưa được duyệt hoặc đang bị đình chỉ, không thể mở lại chiến dịch.');
+    }
+    campaign.status = CampaignStatus.DRAFT;
+    campaign.submittedAt = null;
     return this.campaignRepo.save(campaign);
   }
 

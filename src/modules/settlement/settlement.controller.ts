@@ -2,6 +2,8 @@ import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/co
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { SettlementService } from './settlement.service';
 import { SetCommissionDto } from './dto/set-commission.dto';
+import { MarkPaidDto } from './dto/mark-paid.dto';
+import { RunSettlementDto } from './dto/run-settlement.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { BrandResourceGuard } from '../../common/guards/brand-resource.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -35,19 +37,18 @@ export class SettlementController {
     return this.settlementService.findAll();
   }
 
+  // FR-SETTLE-03: chay chot bang tay khi tac vu nen loi hoac can chot giua ky.
+  // Bo trong ngay thi lay dung ky cua tac vu nen (thang truoc theo gio VN - BR-25).
   @Roles(Role.ADMIN)
   @Post('admin/settlements/run')
-  run(@Body() body: { periodStart: string; periodEnd: string }) {
-    return this.settlementService.runMonthlySettlement(
-      new Date(body.periodStart),
-      new Date(body.periodEnd),
-    );
+  run(@CurrentUser() user: CurrentUserPayload, @Body() dto: RunSettlementDto) {
+    return this.settlementService.runManually(dto, user.userId);
   }
 
   @Roles(Role.ADMIN)
   @Patch('admin/settlements/:id/mark-paid')
-  markPaid(@Param('id') id: string, @Body('bankTxnRef') bankTxnRef: string) {
-    return this.settlementService.markPaid(id, bankTxnRef);
+  markPaid(@CurrentUser() user: CurrentUserPayload, @Param('id') id: string, @Body() dto: MarkPaidDto) {
+    return this.settlementService.markPaid(id, dto, user.userId);
   }
 
   @Roles(Role.BRAND_OWNER, Role.ADMIN)

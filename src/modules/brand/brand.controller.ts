@@ -2,6 +2,8 @@ import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, UseGua
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { BrandService } from './brand.service';
 import { CreateBrandDto } from './dto/create-brand.dto';
+import { RegisterBrandDto } from './dto/register-brand.dto';
+import { RejectBrandDto } from './dto/reject-brand.dto';
 import { CreateStoreDto } from './dto/create-store.dto';
 import { UpdateStoreDto } from './dto/update-store.dto';
 import { CreateStaffDto } from './dto/create-staff.dto';
@@ -17,6 +19,13 @@ import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current
 @Controller('brands')
 export class BrandController {
   constructor(private readonly brandService: BrandService) {}
+
+  // FR-BRAND-01/02: dang ky cong khai, chua co tai khoan. Tao chu thuong hieu PENDING_ACTIVATION +
+  // ho so PENDING roi gui lien ket dat mat khau. Khong gan guard: day la cua vao cua nguoi chua dang nhap.
+  @Post('register')
+  register(@Body() dto: RegisterBrandDto) {
+    return this.brandService.registerBrand(dto);
+  }
 
   @UseGuards(JwtAuthGuard, RolesGuard, BrandResourceGuard)
   @Roles(Role.BRAND_OWNER)
@@ -49,8 +58,8 @@ export class BrandController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @Patch(':id/suspend')
-  suspend(@Param('id') id: string, @Body('reason') reason: string, @CurrentUser() user: CurrentUserPayload) {
-    return this.brandService.suspend(id, reason, user.userId);
+  suspend(@Param('id') id: string, @Body() dto: RejectBrandDto, @CurrentUser() user: CurrentUserPayload) {
+    return this.brandService.suspend(id, dto.reason, user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -63,15 +72,15 @@ export class BrandController {
   @UseGuards(JwtAuthGuard, RolesGuard, BrandResourceGuard)
   @Roles(Role.ADMIN)
   @Patch(':id/approve')
-  approve(@Param('id') id: string) {
-    return this.brandService.approve(id);
+  approve(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.brandService.approve(id, user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard, BrandResourceGuard)
   @Roles(Role.ADMIN)
   @Patch(':id/reject')
-  reject(@Param('id') id: string, @Body('reason') reason: string) {
-    return this.brandService.reject(id, reason);
+  reject(@Param('id') id: string, @Body() dto: RejectBrandDto, @CurrentUser() user: CurrentUserPayload) {
+    return this.brandService.reject(id, dto.reason, user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard, BrandResourceGuard)

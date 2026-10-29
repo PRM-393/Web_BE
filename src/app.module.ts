@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import databaseConfig from './config/typeorm.config';
 import { EntitiesModule } from './entities/entities.module';
@@ -24,6 +25,10 @@ import { WalletModule } from './modules/wallet/wallet.module';
     TypeOrmModule.forRootAsync({
       useFactory: databaseConfig,
     }),
+    // Moi tac vu nen trong repo (chot doi soat F13, chuyen trang thai chien dich F08, nhac het han F16)
+    // deu dua vao mot lan forRoot nay. Truoc day no nam trong SettlementModule, nghia la go module doi
+    // soat ra la toan bo cron tat im ma khong co loi nao bao ra.
+    ScheduleModule.forRoot(),
     EntitiesModule,
     AuthModule,
     BrandModule,
