@@ -220,11 +220,49 @@ describe('F09 - mua va thanh toan (e2e)', () => {
 
     process.env.PAYMENT_SIMULATOR = 'false';
     await t.http.post(`/api/orders/${o.id}/simulate-payment`).set(auth('oanh')).send({}).expect(403);
+    // khong co khoa payOS va tat gia lap: khong tao don giu cho ma khach khong the thanh toan
+    const blocked = await t.http.post('/api/orders').set(auth('oanh')).send({ campaignId: c.id, quantity: 1 }).expect(503);
+    expect(blocked.body.error.message).toContain('payOS');
 
     process.env.PAYMENT_SIMULATOR = 'true';
     const res = await t.http.post(`/api/orders/${o.id}/simulate-payment`).set(auth('oanh')).send({}).expect(201);
     expect(res.body.data.outcome).toBe('FULFILLED');
     expect(res.body.data.order.status).toBe(OrderStatus.FULFILLED);
+  });
+
+  it('payOS: tao link that, app hoi trang thai thi may chu hoi lai payOS va phat hanh voucher (khong can webhook)', async () => {
+    await newCustomer('phuong');
+    const c = await newCampaign(5, 2);
+    const keys = ['PAYOS_CLIENT_ID', 'PAYOS_API_KEY', 'PAYOS_CHECKSUM_KEY'] as const;
+    for (const k of keys) process.env[k] = 'test-' + k;
+    const realFetch = global.fetch;
+    let payosStatus = 'PENDING';
+    const calls: string[] = [];
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      calls.push(`${init?.method ?? 'GET'} ${url}`);
+      if (init?.method === 'POST') {
+        return new Response(JSON.stringify({ code: '00', data: { checkoutUrl: 'https://pay.payos.vn/web/test' } }));
+      }
+      const total = (await t.dataSource.getRepository(Order).findOneByOrFail({ userId: (await t.dataSource.getRepository(User).findOneByOrFail({ email: 'phuong@test.local' })).id })).totalAmount;
+      return new Response(JSON.stringify({ code: '00', data: { status: payosStatus, amountPaid: payosStatus === 'PAID' ? Number(total) : 0, transactions: payosStatus === 'PAID' ? [{ reference: 'FT123' }] : [] } }));
+    }) as typeof fetch;
+    try {
+      const created = (await placeOrder('phuong', c.id, 1)).data;
+      expect(created.paymentUrl).toBe('https://pay.payos.vn/web/test');
+      const id = created.order.id;
+      expect((await t.http.get(`/api/orders/${id}`).set(auth('phuong')).expect(200)).body.data.status).toBe(OrderStatus.PENDING);
+      payosStatus = 'PAID';
+      // hoi lai trong 4 giay dau: chua goi payOS lan nua
+      expect((await t.http.get(`/api/orders/${id}`).set(auth('phuong')).expect(200)).body.data.status).toBe(OrderStatus.PENDING);
+      (t.app.get(OrderService) as any).lastPayosSync.clear();
+      const paid = await t.http.get(`/api/orders/${id}`).set(auth('phuong')).expect(200);
+      expect(paid.body.data.status).toBe(OrderStatus.FULFILLED);
+      expect(await t.dataSource.getRepository(VoucherItem).count({ where: { orderId: id } })).toBe(1);
+      expect(calls.filter((x) => x.startsWith('GET')).length).toBe(2);
+    } finally {
+      global.fetch = realFetch;
+      for (const k of keys) delete process.env[k];
+    }
   });
 
   it('webhook payOS: chu ky sai bi bo qua, orderCode la (payOS gui thu) tra 200', async () => {

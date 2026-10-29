@@ -25,19 +25,13 @@ async function main() {
   const parseJson = json();
   const t = await createTestApp(
     demo
-      ? (app, emails) =>
+      ? (app) =>
           app.use('/api/auth', (req: any, res: any, next: () => void) => parseJson(req, res, next), (req: any, _res: any, next: () => void) => {
             const b = req.body;
             const alias = b && typeof b.email === 'string' ? aliases[b.email.trim().toLowerCase()] : undefined;
             if (alias) {
               b.email = alias;
               if (b.password === '123') b.password = 'Voucher@123';
-              // khach dang nhap bang OTP: o che do demo nhap ma bat ky 6 so, BE dung ma OTP that vua gui
-              if (req.path === '/otp/verify' && typeof b.otp === 'string') {
-                const last = [...emails].reverse().find((m) => m.to === alias);
-                const code = last && /\b\d{6}\b/.exec(last.text);
-                if (code) b.otp = code[0];
-              }
             }
             next();
           })

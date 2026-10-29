@@ -6,8 +6,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Role } from '../../common/enums/role.enum';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
-import { RequestOtpDto } from './dto/request-otp.dto';
-import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { EmailDto, ResetCodeConfirmDto } from './dto/email.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -23,14 +22,9 @@ export class AuthController {
     return this.authService.register(dto);
   }
 
-  @Post('otp/request')
-  requestOtp(@Body() dto: RequestOtpDto) {
-    return this.authService.requestOtp(dto);
-  }
-
-  @Post('otp/verify')
-  verifyOtp(@Body() dto: VerifyOtpDto) {
-    return this.authService.verifyOtp(dto);
+  @Post('check-email')
+  checkEmail(@Body() dto: EmailDto) {
+    return this.authService.checkEmail(dto.email);
   }
 
   @Post('login')
@@ -54,6 +48,12 @@ export class AuthController {
 
   @Post('password-reset/confirm')
   resetPassword(@Body() dto: ActivateDto) { return this.authService.resetPassword(dto.email, dto.token, dto.password); }
+
+  @Post('password-reset/code-request')
+  requestResetCode(@Body() dto: EmailDto) { return this.authService.requestResetCode(dto.email); }
+
+  @Post('password-reset/code-confirm')
+  resetWithCode(@Body() dto: ResetCodeConfirmDto) { return this.authService.resetWithCode(dto.email, dto.code, dto.password); }
 
   @Post('activation/request')
   requestActivation(@Body() dto: ActivationRequestDto) { return this.authService.sendActivation(dto.email); }

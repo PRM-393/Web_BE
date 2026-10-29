@@ -1,5 +1,5 @@
 -- TU DONG SINH boi database/generate-seed.ts. Du lieu mau chi dung khi phat trien / demo.
--- Chay sau schema.sql. Mat khau cac tai khoan web: Voucher@123
+-- Chay sau schema.sql. Mat khau moi tai khoan mau (ca khach khach@voucher.local): Voucher@123
 -- Du lieu demo dung moc ngay tuong doi: chay lai npm run db:seed-sql de lam tuoi.
 
 INSERT INTO "categories" ("id", "name", "icon", "displayOrder") VALUES ('11111111-0000-4000-8000-000000000001', 'Cà phê & trà', 'coffee', 1);
@@ -10,7 +10,7 @@ INSERT INTO "categories" ("id", "name", "icon", "displayOrder") VALUES ('1111111
 INSERT INTO "users" ("id", "email", "passwordHash", "fullName", "role", "status") VALUES ('22222222-0000-4000-8000-000000000001', 'admin@voucher.local', '$2b$10$bggePVs.gaqRXCWtZDOtkOL.BnP7WWIZDw7x27LjDEne.tLx7En1i', 'Quản trị viên', 'ADMIN', 'ACTIVE');
 INSERT INTO "users" ("id", "email", "passwordHash", "fullName", "role", "status") VALUES ('22222222-0000-4000-8000-000000000002', 'owner@highlands.local', '$2b$10$bggePVs.gaqRXCWtZDOtkOL.BnP7WWIZDw7x27LjDEne.tLx7En1i', 'Chủ Highlands', 'BRAND_OWNER', 'ACTIVE');
 INSERT INTO "users" ("id", "email", "passwordHash", "fullName", "role", "status") VALUES ('22222222-0000-4000-8000-000000000003', 'staff@highlands.local', '$2b$10$bggePVs.gaqRXCWtZDOtkOL.BnP7WWIZDw7x27LjDEne.tLx7En1i', 'Nhân viên Lê Lợi', 'STORE_STAFF', 'ACTIVE');
-INSERT INTO "users" ("id", "email", "passwordHash", "fullName", "phone", "role", "status") VALUES ('22222222-0000-4000-8000-000000000004', 'khach@voucher.local', NULL, 'Khách hàng mẫu', '0900000000', 'CUSTOMER', 'ACTIVE');
+INSERT INTO "users" ("id", "email", "passwordHash", "fullName", "phone", "role", "status") VALUES ('22222222-0000-4000-8000-000000000004', 'khach@voucher.local', '$2b$10$bggePVs.gaqRXCWtZDOtkOL.BnP7WWIZDw7x27LjDEne.tLx7En1i', 'Khách hàng mẫu', '0900000000', 'CUSTOMER', 'ACTIVE');
 INSERT INTO "users" ("id", "email", "passwordHash", "fullName", "role", "status") VALUES ('22222222-0000-4000-8000-000000000005', 'owner@phuclong.local', '$2b$10$bggePVs.gaqRXCWtZDOtkOL.BnP7WWIZDw7x27LjDEne.tLx7En1i', 'Chủ Phúc Long', 'BRAND_OWNER', 'ACTIVE');
 INSERT INTO "users" ("id", "email", "passwordHash", "fullName", "role", "status") VALUES ('22222222-0000-4000-8000-000000000006', 'owner@pizza4ps.local', '$2b$10$bggePVs.gaqRXCWtZDOtkOL.BnP7WWIZDw7x27LjDEne.tLx7En1i', 'Chủ Pizza 4P''s', 'BRAND_OWNER', 'ACTIVE');
 INSERT INTO "users" ("id", "email", "passwordHash", "fullName", "role", "status") VALUES ('22222222-0000-4000-8000-000000000007', 'owner@guardian.local', '$2b$10$bggePVs.gaqRXCWtZDOtkOL.BnP7WWIZDw7x27LjDEne.tLx7En1i', 'Chủ Guardian', 'BRAND_OWNER', 'ACTIVE');

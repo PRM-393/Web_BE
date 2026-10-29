@@ -146,7 +146,7 @@ const tables: [string, Row[]][] = [
     { id: id.admin, email: 'admin@voucher.local', passwordHash: hash, fullName: 'Quản trị viên', role: 'ADMIN', status: 'ACTIVE' },
     { id: id.owner, email: 'owner@highlands.local', passwordHash: hash, fullName: 'Chủ Highlands', role: 'BRAND_OWNER', status: 'ACTIVE' },
     { id: id.staff, email: 'staff@highlands.local', passwordHash: hash, fullName: 'Nhân viên Lê Lợi', role: 'STORE_STAFF', status: 'ACTIVE' },
-    { id: id.customer, email: 'khach@voucher.local', passwordHash: null, fullName: 'Khách hàng mẫu', phone: '0900000000', role: 'CUSTOMER', status: 'ACTIVE' },
+    { id: id.customer, email: 'khach@voucher.local', passwordHash: hash, fullName: 'Khách hàng mẫu', phone: '0900000000', role: 'CUSTOMER', status: 'ACTIVE' },
     { id: id.owner2, email: 'owner@phuclong.local', passwordHash: hash, fullName: 'Chủ Phúc Long', role: 'BRAND_OWNER', status: 'ACTIVE' },
     { id: id.owner3, email: 'owner@pizza4ps.local', passwordHash: hash, fullName: 'Chủ Pizza 4P\'s', role: 'BRAND_OWNER', status: 'ACTIVE' },
     { id: id.owner4, email: 'owner@guardian.local', passwordHash: hash, fullName: 'Chủ Guardian', role: 'BRAND_OWNER', status: 'ACTIVE' },
@@ -501,7 +501,7 @@ function literal(d: Dialect, v: Value): string {
 function build(d: Dialect) {
   const lines = [
     '-- TU DONG SINH boi database/generate-seed.ts. Du lieu mau chi dung khi phat trien / demo.',
-    `-- Chay sau schema.sql. Mat khau cac tai khoan web: ${PASSWORD}`,
+    `-- Chay sau schema.sql. Mat khau moi tai khoan mau (ca khach khach@voucher.local): ${PASSWORD}`,
     '-- Du lieu demo dung moc ngay tuong doi: chay lai npm run db:seed-sql de lam tuoi.',
     ...(d === 'mysql' ? ['SET NAMES utf8mb4;', "SET time_zone = '+00:00';"] : []),
     '',
