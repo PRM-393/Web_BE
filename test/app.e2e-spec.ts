@@ -99,15 +99,16 @@ describe('Web_BE e2e (pg-mem)', () => {
   });
 
   it('tao chien dich: bat FR-CAMP-12 va luu dung truong gia tri', async () => {
+    const future = (days: number) => new Date(Date.now() + days * 86400000).toISOString();
     const base = {
       title: 'Giam 30% tra sua',
       voucherType: 'DISCOUNT',
       salePrice: 10000,
       faceValue: 50000,
       totalQuantity: 50,
-      saleStartAt: '2026-11-01T00:00:00.000Z',
-      saleEndAt: '2026-11-30T00:00:00.000Z',
-      voucherExpireAt: '2026-12-31T00:00:00.000Z',
+      saleStartAt: future(30),
+      saleEndAt: future(60),
+      voucherExpireAt: future(90),
       storeIds: [ID.store1],
     };
     // giam theo % ma thieu muc giam toi da
