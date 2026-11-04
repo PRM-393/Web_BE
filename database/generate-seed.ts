@@ -225,7 +225,7 @@ const tables: [string, Row[]][] = [
     { id: id.assign6, userId: id.staff4, storeId: id.store8, active: true },
     { id: id.assign7, userId: id.staff5, storeId: id.store11, active: true },
   ]],
-  // 15 chien dich, du 3 loai (DISCOUNT / PREPAID / COMBO) va du cac trang thai de demo.
+  // 15 chien dich, du 2 loai (DISCOUNT / PREPAID) va du cac trang thai de demo.
   // Luu y: man Home chi hien PUBLISHED va saleStartAt <= now <= saleEndAt (search.service.ts, BR-08).
   // Muon demo the "Het hang" tren app thi de PUBLISHED voi soldQuantity + reservedQuantity = totalQuantity,
   // con SOLD_OUT that chi nhin thay o portal thuong hieu / quan tri.
@@ -238,7 +238,7 @@ const tables: [string, Row[]][] = [
       saleStartAt: saleStart, saleEndAt: saleEnd, voucherExpireAt: expire, status: 'PUBLISHED',
     },
     {
-      id: id.campDraft, brandId: id.brand, categoryId: id.catCafe, title: 'Combo bánh mì + cà phê sữa', voucherType: 'COMBO', comboItems: '1 bánh mì que, 1 phin sữa đá size M',
+      id: id.campDraft, brandId: id.brand, categoryId: id.catCafe, title: 'Voucher bánh mì + cà phê sữa', voucherType: 'PREPAID',
       description: '1 bánh mì que + 1 phin sữa đá', salePrice: 45000, faceValue: 59000, totalQuantity: 100,
       limitPerUser: 5, saleStartAt: saleStart, saleEndAt: saleEnd, voucherExpireAt: expire, status: 'DRAFT',
     },
@@ -250,8 +250,8 @@ const tables: [string, Row[]][] = [
 
     // --- Phuc Long: dang ban / het hang / sap ket thuc ban ---
     {
-      id: id.camp04, brandId: id.brand2, categoryId: id.catCafe, title: 'Trà sữa Phúc Long mua 1 tặng 1', voucherType: 'COMBO',
-      comboItems: '2 ly trà sữa Phúc Long size L', description: 'Áp dụng cả ngày, kể cả cuối tuần',
+      id: id.camp04, brandId: id.brand2, categoryId: id.catCafe, title: 'Voucher trà sữa Phúc Long mua 1 tặng 1', voucherType: 'PREPAID',
+      description: 'Áp dụng cả ngày, kể cả cuối tuần',
       terms: 'Mỗi lượt dùng một voucher, không quy đổi thành tiền mặt',
       salePrice: 55000, faceValue: 110000, totalQuantity: 500, soldQuantity: 124, reservedQuantity: 6, limitPerUser: 5,
       saleStartAt: vn(-20), saleEndAt: vn(120, '23:59'), voucherExpireAt: addDays(vn(120, '23:59'), 60),
@@ -285,8 +285,8 @@ const tables: [string, Row[]][] = [
     },
     // SOLD_OUT that: ban het truoc khi het thoi gian ban (FR-CAMP-10), khong con hien tren app
     {
-      id: id.camp08, brandId: id.brand3, categoryId: id.catFood, title: 'Combo 2 pizza cỡ M kèm 2 nước ép', voucherType: 'COMBO',
-      comboItems: '2 pizza size M tùy chọn, 2 nước ép trái cây', description: 'Combo cho 2 người',
+      id: id.camp08, brandId: id.brand3, categoryId: id.catFood, title: 'Voucher 2 pizza cỡ M kèm 2 nước ép', voucherType: 'PREPAID',
+      description: 'Gói voucher cho 2 người',
       terms: 'Dùng tại chỗ, không áp dụng mang về',
       salePrice: 350000, faceValue: 460000, totalQuantity: 100, soldQuantity: 100, reservedQuantity: 0, limitPerUser: 2,
       saleStartAt: vn(-40), saleEndAt: vn(60, '23:59'), voucherExpireAt: addDays(vn(60, '23:59'), 40),
@@ -321,8 +321,8 @@ const tables: [string, Row[]][] = [
     },
     // ENDED: het thoi gian ban, nhung voucher da ban van con han dung (BR-15)
     {
-      id: id.camp12, brandId: id.brand4, categoryId: id.catBeauty, title: 'Combo sữa rửa mặt và kem chống nắng', voucherType: 'COMBO',
-      comboItems: '1 sữa rửa mặt 100ml, 1 kem chống nắng SPF50', description: 'Bộ đôi chăm sóc da hằng ngày',
+      id: id.camp12, brandId: id.brand4, categoryId: id.catBeauty, title: 'Voucher sữa rửa mặt và kem chống nắng', voucherType: 'PREPAID',
+      description: 'Bộ đôi chăm sóc da hằng ngày',
       terms: 'Đổi tại quầy, không đổi sang sản phẩm khác',
       salePrice: 199000, faceValue: 280000, totalQuantity: 120, soldQuantity: 118, reservedQuantity: 0, limitPerUser: 2,
       saleStartAt: vn(-60), saleEndAt: vn(-5, '23:59'), voucherExpireAt: addDays(vn(-5, '23:59'), 30),
@@ -331,8 +331,8 @@ const tables: [string, Row[]][] = [
 
     // --- CGV: dang ban / cho duyet / da duyet chua toi ngay ban ---
     {
-      id: id.camp13, brandId: id.brand5, categoryId: id.catMovie, title: 'Cặp vé xem phim 2D cuối tuần', voucherType: 'COMBO',
-      comboItems: '2 vé 2D ghế thường, 1 bắp rang và 2 nước ngọt', description: 'Áp dụng thứ Bảy và Chủ nhật',
+      id: id.camp13, brandId: id.brand5, categoryId: id.catMovie, title: 'Voucher cặp vé xem phim 2D cuối tuần', voucherType: 'PREPAID',
+      description: 'Áp dụng thứ Bảy và Chủ nhật',
       terms: 'Không áp dụng cho suất chiếu đặc biệt và phim 3D',
       salePrice: 150000, faceValue: 220000, totalQuantity: 600, soldQuantity: 234, reservedQuantity: 8, limitPerUser: 4,
       saleStartAt: vn(-25), saleEndAt: vn(70, '23:59'), voucherExpireAt: addDays(vn(70, '23:59'), 45),
@@ -449,8 +449,8 @@ function assertConstraints() {
       if (c.discountType === 'PERCENT' && !c.maxDiscount) errors.push(`FR-CAMP-12: ${c.title} giam theo % nhung thieu maxDiscount`);
       if (c.discountType === 'PERCENT' && Number(c.discountValue) > 100) errors.push(`FR-CAMP-12: ${c.title} co discountValue > 100`);
     }
-    if (c.voucherType === 'PREPAID' && Number(c.faceValue) <= Number(c.salePrice)) errors.push(`FR-CAMP-12: ${c.title} la PREPAID nhung faceValue <= salePrice`);
-    if (c.voucherType === 'COMBO' && !c.comboItems) errors.push(`FR-CAMP-12: ${c.title} la COMBO nhung thieu comboItems`);
+    if (!['DISCOUNT', 'PREPAID'].includes(String(c.voucherType))) errors.push(`FR-CAMP-12: ${c.title} co voucherType khong hop le`);
+    if (Number(c.faceValue) <= Number(c.salePrice)) errors.push(`FR-CAMP-12: ${c.title} co faceValue <= salePrice`);
     // DC-07
     if (!storesWithCampaign.has(c.id as string)) errors.push(`DC-07: ${c.title} khong co chi nhanh ap dung nao`);
   }

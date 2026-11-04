@@ -174,7 +174,19 @@ describe('FR-CAMP-12 - truong gia tri theo loai voucher', () => {
     ).not.toThrow();
   });
 
-  it('combo thieu mo ta noi dung goi thi bi tu choi', () => {
+  it('ma giam gia cung phai co gia ban nho hon gia tri voucher', () => {
+    expect(() =>
+      validateValueFields({
+        voucherType: VoucherType.DISCOUNT,
+        salePrice: 100000,
+        faceValue: 100000,
+        discountType: DiscountType.AMOUNT,
+        discountValue: 10000,
+      }),
+    ).toThrow(BadRequestException);
+  });
+
+  it('tu choi loai COMBO', () => {
     expect(() =>
       validateValueFields({ voucherType: VoucherType.COMBO, salePrice: 45000, faceValue: 59000 }),
     ).toThrow(BadRequestException);

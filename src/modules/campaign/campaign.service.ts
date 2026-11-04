@@ -17,12 +17,17 @@ export interface ValueFields {
   discountType?: DiscountType | null;
   discountValue?: number | string | null;
   maxDiscount?: number | string | null;
-  comboItems?: string | null;
 }
 
 export function validateValueFields(dto: ValueFields) {
   const salePrice = Number(dto.salePrice);
   const faceValue = Number(dto.faceValue);
+  if (dto.voucherType !== VoucherType.DISCOUNT && dto.voucherType !== VoucherType.PREPAID) {
+    throw new BadRequestException('Loại voucher chỉ có thể là Mã giảm giá hoặc Voucher mệnh giá trả trước.');
+  }
+  if (!Number.isFinite(salePrice) || !Number.isFinite(faceValue) || salePrice >= faceValue) {
+    throw new BadRequestException('Giá bán phải nhỏ hơn giá trị voucher.');
+  }
   if (dto.voucherType === VoucherType.DISCOUNT) {
     if (!dto.discountType || !dto.discountValue) {
       throw new BadRequestException('Mã giảm giá cần kiểu giảm (số tiền / phần trăm) và giá trị giảm.');
@@ -30,12 +35,6 @@ export function validateValueFields(dto: ValueFields) {
     if (dto.discountType === DiscountType.PERCENT && (Number(dto.discountValue) > 100 || !dto.maxDiscount)) {
       throw new BadRequestException('Giảm theo phần trăm cần giá trị từ 1 đến 100 và mức giảm tối đa.');
     }
-  }
-  if (dto.voucherType === VoucherType.PREPAID && faceValue <= salePrice) {
-    throw new BadRequestException('Voucher mệnh giá phải có giá trị lớn hơn giá bán.');
-  }
-  if (dto.voucherType === VoucherType.COMBO && !dto.comboItems) {
-    throw new BadRequestException('Combo cần mô tả nội dung gói.');
   }
 }
 
@@ -114,7 +113,7 @@ export class CampaignService {
       discountType: dto.discountType ?? null,
       discountValue: dto.discountValue ?? null,
       maxDiscount: dto.maxDiscount ?? null,
-      comboItems: dto.comboItems ?? null,
+      comboItems: null,
       totalQuantity: dto.totalQuantity,
       limitPerUser: dto.limitPerUser ?? 5,
       saleStartAt: new Date(dto.saleStartAt),
