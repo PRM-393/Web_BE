@@ -230,6 +230,81 @@ describe('F09 - mua va thanh toan (e2e)', () => {
     expect(res.body.data.order.status).toBe(OrderStatus.FULFILLED);
   });
 
+  describe('thanh toan gio hang bang mot ma QR', () => {
+    const keys = ['PAYOS_CLIENT_ID', 'PAYOS_API_KEY', 'PAYOS_CHECKSUM_KEY'] as const;
+    const realFetch = global.fetch;
+    let linkBodies: any[];
+
+    beforeEach(() => {
+      linkBodies = [];
+      for (const k of keys) process.env[k] = 'test-' + k;
+      global.fetch = (async (_url: string, init?: RequestInit) => {
+        linkBodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ code: '00', data: { checkoutUrl: 'https://pay.payos.vn/web/gio', qrCode: '000201-GIO' } }));
+      }) as typeof fetch;
+    });
+    afterEach(() => {
+      for (const k of keys) delete process.env[k];
+      global.fetch = realFetch;
+    });
+
+    const checkout = (who: string, items: { campaignId: string; quantity: number }[], status = 201) =>
+      t.http.post('/api/orders/checkout').set(auth(who)).send({ items }).expect(status);
+    const webhook = (code: string, amount: number, reference = 'FT-GIO') =>
+      t.app.get(OrderService).handlePayosWebhook({ orderCode: code, gatewayTxnId: `PAYOS-${reference}`, amount, success: true, raw: {} });
+    const sumTotal = (orders: any[]) => orders.reduce((s, o) => s + Number(o.totalAmount), 0);
+
+    it('mot link cho tong tien; webhook phat hanh voucher moi don; gui lai khong phat hanh them', async () => {
+      await newCustomer('gio1');
+      const [a, b] = [await newCampaign(5, 5), await newCampaign(5, 5)];
+      const { orders, paymentUrl } = (await checkout('gio1', [{ campaignId: a.id, quantity: 2 }, { campaignId: b.id, quantity: 1 }])).body.data;
+      expect(paymentUrl).toBe('https://pay.payos.vn/web/gio');
+      expect(orders).toHaveLength(2);
+      expect(linkBodies).toHaveLength(1);
+      expect(linkBodies[0].amount).toBe(sumTotal(orders));
+      expect(orders.every((o: any) => o.paymentQr === '000201-GIO' && Number(o.paymentAmount) === sumTotal(orders))).toBe(true);
+
+      const code = String(orders[0].paymentGroupCode);
+      await webhook(code, sumTotal(orders));
+      await webhook(code, sumTotal(orders));
+      const repo = t.dataSource.getRepository(VoucherItem);
+      expect(await repo.count({ where: { campaignId: a.id } })).toBe(2);
+      expect(await repo.count({ where: { campaignId: b.id } })).toBe(1);
+      for (const o of orders) expect((await t.dataSource.getRepository(Order).findOneByOrFail({ id: o.id })).status).toBe(OrderStatus.FULFILLED);
+      expect((await campaign(a.id)).reservedQuantity).toBe(0);
+    });
+
+    it('mot voucher khong du dieu kien thi khong tao don nao va khong giu cho', async () => {
+      await newCustomer('gio2');
+      const [a, b] = [await newCampaign(5, 5), await newCampaign(1, 5)];
+      const res = await checkout('gio2', [{ campaignId: a.id, quantity: 1 }, { campaignId: b.id, quantity: 2 }], 400);
+      expect(res.body.error.message).toContain(b.title);
+      // pg-mem khong ho tro ROLLBACK nen khong kiem tra duoc so giu cho o day; tren PostgreSQL ca giao dich duoc hoan tac
+      expect((await campaign(b.id)).reservedQuantity).toBe(0);
+      expect(linkBodies).toHaveLength(0);
+    });
+
+    it('chuyen thieu tien: khong phat hanh voucher nao, nha giu cho, don dau cho hoan dung so da nhan', async () => {
+      await newCustomer('gio3');
+      const [a, b] = [await newCampaign(5, 5), await newCampaign(5, 5)];
+      const { orders } = (await checkout('gio3', [{ campaignId: a.id, quantity: 1 }, { campaignId: b.id, quantity: 1 }])).body.data;
+      const repo = t.dataSource.getRepository(Order);
+      const sorted = await repo.find({ where: { paymentGroupCode: orders[0].paymentGroupCode }, order: { createdAt: 'ASC', id: 'ASC' } });
+      await webhook(String(orders[0].paymentGroupCode), Number(sorted[0].totalAmount));
+      expect((await repo.findOneByOrFail({ id: sorted[0].id })).status).toBe(OrderStatus.PAYMENT_MISMATCH);
+      expect((await repo.findOneByOrFail({ id: sorted[1].id })).status).toBe(OrderStatus.CANCELLED);
+      expect(await t.dataSource.getRepository(VoucherItem).count({ where: { orderId: sorted[0].id } })).toBe(0);
+      expect((await campaign(a.id)).reservedQuantity).toBe(0);
+      expect((await campaign(b.id)).reservedQuantity).toBe(0);
+    });
+
+    it('khong cho chon trung mot voucher', async () => {
+      await newCustomer('gio4');
+      const a = await newCampaign(5, 5);
+      await checkout('gio4', [{ campaignId: a.id, quantity: 1 }, { campaignId: a.id, quantity: 1 }], 400);
+    });
+  });
+
   it('payOS: tao link that, app hoi trang thai thi may chu hoi lai payOS va phat hanh voucher (khong can webhook)', async () => {
     await newCustomer('phuong');
     const c = await newCampaign(5, 2);

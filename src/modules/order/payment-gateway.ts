@@ -14,6 +14,8 @@ export interface PaymentResult {
   amount: number;
   success: boolean;
   raw: Record<string, unknown>;
+  // Thanh toan nhom lech tong tien: danh dau lech ke ca khi so tien vo tinh bang dung don nay
+  forceMismatch?: boolean;
 }
 
 export interface PayosWebhookResult {

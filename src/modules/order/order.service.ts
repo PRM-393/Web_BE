@@ -28,7 +28,7 @@ import {
   VoucherItemStatus,
 } from '../../common/enums/status.enum';
 import { NotificationService } from '../notification/notification.service';
-import { CreateOrderDto } from './dto/create-order.dto';
+import { CreateCheckoutDto, CreateOrderDto } from './dto/create-order.dto';
 import { PaymentWebhookDto } from './dto/payment-webhook.dto';
 import { availableStock, isOnSale, refundableUntil, remainingPurchaseQuota, voucherCode } from './order.rules';
 import { PaymentResult, PayosWebhookResult, createPayosLink, fetchPayosPayment, newPaymentOrderCode, payosConfigured, verifyWebhook } from './payment-gateway';
@@ -65,7 +65,45 @@ export class OrderService {
     if (!payosConfigured() && process.env.PAYMENT_SIMULATOR !== 'true') {
       throw new ServiceUnavailableException('Cổng thanh toán payOS chưa sẵn sàng. Vui lòng thử lại sau.');
     }
-    const order = await this.dataSource.transaction(async (manager) => {
+    const order = await this.dataSource.transaction((manager) => this.reserveOrder(manager, userId, dto));
+    return { order, paymentUrl: await this.ensurePaymentLink(order) };
+  }
+
+  // Thanh toan gio hang: moi voucher mot don, tat ca dung chung mot ma payOS va mot QR tong.
+  // Giu cho trong cung mot giao dich: mot voucher khong du dieu kien thi khong don nao duoc tao.
+  async createCheckout(userId: string, dto: CreateCheckoutDto) {
+    if (!payosConfigured() && process.env.PAYMENT_SIMULATOR !== 'true') {
+      throw new ServiceUnavailableException('Cổng thanh toán payOS chưa sẵn sàng. Vui lòng thử lại sau.');
+    }
+    if (new Set(dto.items.map((i) => i.campaignId)).size !== dto.items.length) {
+      throw new BadRequestException('Mỗi voucher chỉ được chọn một lần.');
+    }
+    const paymentGroupCode = newPaymentOrderCode();
+    const reservedUntil = new Date(Date.now() + RESERVATION_MINUTES() * 60 * 1000);
+    // Khoa chien dich theo thu tu co dinh de hai gio hang cung luc khong khoa cheo nhau
+    const items = [...dto.items].sort((a, b) => a.campaignId.localeCompare(b.campaignId));
+    const created = await this.dataSource.transaction(async (manager) => {
+      const orders: Order[] = [];
+      for (const item of items) {
+        try {
+          orders.push(await this.reserveOrder(manager, userId, item, { paymentGroupCode, reservedUntil }));
+        } catch (e) {
+          if (!(e instanceof BadRequestException)) throw e;
+          const campaign = await manager.findOneBy(VoucherCampaign, { id: item.campaignId });
+          throw new BadRequestException(`${campaign?.title ?? 'Voucher'}: ${e.message}`);
+        }
+      }
+      const paymentAmount = orders.reduce((sum, o) => sum + Number(o.totalAmount), 0);
+      await manager.update(Order, { paymentGroupCode }, { paymentAmount });
+      orders.forEach((o) => (o.paymentAmount = paymentAmount));
+      return orders;
+    });
+    const paymentUrl = await this.ensurePaymentLink(created[0]);
+    const orders = await this.orderRepo.find({ where: { paymentGroupCode }, relations: ['campaign'], order: { createdAt: 'ASC' } });
+    return { orders, paymentUrl, paymentAmount: created[0].paymentAmount };
+  }
+
+  private async reserveOrder(manager: EntityManager, userId: string, dto: CreateOrderDto, group: Partial<Order> = {}) {
       // Khoa ban ghi chien dich de 2 nguoi mua voucher cuoi cung cung luc khong ban vuot
       const campaign = await this.lockCampaign(manager, dto.campaignId);
       if (campaign.status !== CampaignStatus.PUBLISHED || !isOnSale(campaign, new Date())) {
@@ -108,10 +146,9 @@ export class OrderService {
           status: OrderStatus.PENDING,
           paymentOrderCode: newPaymentOrderCode(),
           reservedUntil: new Date(Date.now() + RESERVATION_MINUTES() * 60 * 1000),
+          ...group,
         }),
       );
-    });
-    return { order, paymentUrl: await this.ensurePaymentLink(order) };
   }
 
   // FR-ORDER-12: thanh toan lai don PENDING con trong thoi gian giu cho, lien ket het han dung reservedUntil
@@ -129,14 +166,17 @@ export class OrderService {
     if (order.paymentUrl) return order.paymentUrl;
     try {
       const link = await createPayosLink({
-        orderCode: String(order.paymentOrderCode),
-        amount: Number(order.totalAmount),
+        orderCode: this.payosCode(order),
+        amount: Number(order.paymentAmount ?? order.totalAmount),
         expiresAt: new Date(order.reservedUntil),
       });
       if (!link) return null;
       order.paymentUrl = link.checkoutUrl;
       order.paymentQr = link.qrCode;
-      await this.orderRepo.update(order.id, { paymentUrl: link.checkoutUrl, paymentQr: link.qrCode });
+      await this.orderRepo.update(
+        order.paymentGroupCode ? { paymentGroupCode: order.paymentGroupCode } : { id: order.id },
+        { paymentUrl: link.checkoutUrl, paymentQr: link.qrCode },
+      );
       return link.checkoutUrl;
     } catch (e) {
       // Don van giu cho; khach bam "Thanh toan lai" de tao link khi cong hoat dong lai
@@ -145,11 +185,40 @@ export class OrderService {
     }
   }
 
+  // Ma gui sang payOS: don trong gio hang dung chung ma nhom, don le dung ma rieng
+  private payosCode(order: Order): string {
+    return String(order.paymentGroupCode ?? order.paymentOrderCode);
+  }
+
   // Webhook payOS: tim don theo orderCode roi xu ly chung. Don khong ton tai (vd. payOS gui thu khi dang ky webhook) -> bo qua.
   async handlePayosWebhook(result: PayosWebhookResult): Promise<PaymentOutcome | 'UNKNOWN_ORDER'> {
-    const order = await this.orderRepo.findOne({ where: { paymentOrderCode: result.orderCode } });
+    const order = await this.orderRepo.findOne({
+      where: [{ paymentOrderCode: result.orderCode }, { paymentGroupCode: result.orderCode }],
+    });
     if (!order) return 'UNKNOWN_ORDER';
-    return this.processPayment({ ...result, orderId: order.id });
+    return this.settlePayment(order, result);
+  }
+
+  // Ghi nhan mot giao dich payOS cho don le hoac ca nhom. Moi don trong nhom co mot Payment rieng theo dung so tien cua don,
+  // nen hoan tien va doi soat van tinh theo tung don; ma giao dich them id don de van idempotent (DC-04).
+  private async settlePayment(
+    order: Order,
+    p: { gatewayTxnId: string; amount: number; success: boolean; raw: Record<string, unknown> },
+  ): Promise<PaymentOutcome> {
+    const base = { gatewayTxnId: p.gatewayTxnId, amount: p.amount, success: p.success, raw: p.raw };
+    if (!order.paymentGroupCode) return this.processPayment({ ...base, orderId: order.id });
+    const orders = await this.orderRepo.find({ where: { paymentGroupCode: order.paymentGroupCode }, order: { createdAt: 'ASC', id: 'ASC' } });
+    const total = orders.reduce((sum, o) => sum + Number(o.totalAmount), 0);
+    const exact = p.success && Number(p.amount) === total;
+    let outcome: PaymentOutcome = 'IGNORED';
+    for (const [i, o] of orders.entries()) {
+      const txn = { ...base, orderId: o.id, gatewayTxnId: `${p.gatewayTxnId}:${o.id}` };
+      if (exact) outcome = await this.processPayment({ ...txn, amount: Number(o.totalAmount) });
+      // BR-20: lech so tien: don dau giu toan bo khoan da nhan de quan tri vien hoan, cac don con lai huy va nha giu cho
+      else if (p.success && i === 0) outcome = await this.processPayment({ ...txn, forceMismatch: true });
+      else outcome = await this.processPayment({ ...txn, amount: 0, success: false });
+    }
+    return outcome;
   }
 
   findMyOrders(userId: string) {
@@ -187,11 +256,11 @@ export class OrderService {
 
   // Ghi nhan ket qua that tu payOS; tra ve true neu payOS da co ket qua cuoi (da tra tien / khach huy)
   private async applyPayosStatus(order: Order): Promise<boolean> {
-    const info = await fetchPayosPayment(String(order.paymentOrderCode));
+    const code = this.payosCode(order);
+    const info = await fetchPayosPayment(code);
     if (info?.status === 'PAID') {
-      await this.processPayment({
-        orderId: order.id,
-        gatewayTxnId: `PAYOS-${info.reference ?? order.paymentOrderCode}`,
+      await this.settlePayment(order, {
+        gatewayTxnId: `PAYOS-${info.reference ?? code}`,
         amount: info.amountPaid,
         success: true,
         raw: info.raw,
@@ -199,9 +268,7 @@ export class OrderService {
       return true;
     }
     if (info?.status === 'CANCELLED') {
-      await this.processPayment({
-        orderId: order.id, gatewayTxnId: `PAYOS-CANCEL-${order.paymentOrderCode}`, amount: 0, success: false, raw: info.raw,
-      });
+      await this.settlePayment(order, { gatewayTxnId: `PAYOS-CANCEL-${code}`, amount: 0, success: false, raw: info.raw });
       return true;
     }
     return false;
@@ -294,7 +361,7 @@ export class OrderService {
       }
 
       // BR-20: so tien phai khop tong tien don
-      if (Number(p.amount) !== Number(order.totalAmount)) {
+      if (p.forceMismatch || Number(p.amount) !== Number(order.totalAmount)) {
         if (order.status === OrderStatus.PENDING) await this.releaseReservation(manager, order);
         if (order.status === OrderStatus.PENDING || order.status === OrderStatus.CANCELLED) {
           order.status = OrderStatus.PAYMENT_MISMATCH;
