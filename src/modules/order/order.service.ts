@@ -128,16 +128,16 @@ export class OrderService {
   private async ensurePaymentLink(order: Order): Promise<string | null> {
     if (order.paymentUrl) return order.paymentUrl;
     try {
-      const url = await createPayosLink({
+      const link = await createPayosLink({
         orderCode: String(order.paymentOrderCode),
         amount: Number(order.totalAmount),
         expiresAt: new Date(order.reservedUntil),
       });
-      if (url) {
-        order.paymentUrl = url;
-        await this.orderRepo.update(order.id, { paymentUrl: url });
-      }
-      return url;
+      if (!link) return null;
+      order.paymentUrl = link.checkoutUrl;
+      order.paymentQr = link.qrCode;
+      await this.orderRepo.update(order.id, { paymentUrl: link.checkoutUrl, paymentQr: link.qrCode });
+      return link.checkoutUrl;
     } catch (e) {
       // Don van giu cho; khach bam "Thanh toan lai" de tao link khi cong hoat dong lai
       this.logger.warn(`Khong tao duoc link payOS cho don ${order.id}: ${(e as Error).message}`);

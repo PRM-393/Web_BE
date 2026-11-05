@@ -58,6 +58,10 @@ export class Order {
   @Column({ type: 'text', nullable: true })
   paymentUrl: string | null;
 
+  // Chuoi VietQR cua payOS: app ve ma QR ngay trong ung dung, khong can mo trinh duyet
+  @Column({ type: 'text', nullable: true })
+  paymentQr: string | null;
+
   // giu cho ton kho toi da 15 phut - FR-ORDER-03, BR-02
   @Column({ type: DATETIME })
   reservedUntil: Date;

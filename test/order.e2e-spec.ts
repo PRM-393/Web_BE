@@ -241,7 +241,7 @@ describe('F09 - mua va thanh toan (e2e)', () => {
     global.fetch = (async (url: string, init?: RequestInit) => {
       calls.push(`${init?.method ?? 'GET'} ${url}`);
       if (init?.method === 'POST') {
-        return new Response(JSON.stringify({ code: '00', data: { checkoutUrl: 'https://pay.payos.vn/web/test' } }));
+        return new Response(JSON.stringify({ code: '00', data: { checkoutUrl: 'https://pay.payos.vn/web/test', qrCode: '000201-QR-TEST' } }));
       }
       const total = (await t.dataSource.getRepository(Order).findOneByOrFail({ userId: (await t.dataSource.getRepository(User).findOneByOrFail({ email: 'phuong@test.local' })).id })).totalAmount;
       return new Response(JSON.stringify({ code: '00', data: { status: payosStatus, amountPaid: payosStatus === 'PAID' ? Number(total) : 0, transactions: payosStatus === 'PAID' ? [{ reference: 'FT123' }] : [] } }));
@@ -249,6 +249,7 @@ describe('F09 - mua va thanh toan (e2e)', () => {
     try {
       const created = (await placeOrder('phuong', c.id, 1)).data;
       expect(created.paymentUrl).toBe('https://pay.payos.vn/web/test');
+      expect(created.order.paymentQr).toBe('000201-QR-TEST');
       const id = created.order.id;
       expect((await t.http.get(`/api/orders/${id}`).set(auth('phuong')).expect(200)).body.data.status).toBe(OrderStatus.PENDING);
       payosStatus = 'PAID';
