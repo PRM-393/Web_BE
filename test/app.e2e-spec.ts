@@ -8,9 +8,9 @@ import { DataSource, IsNull } from 'typeorm';
 import { Payment } from '../src/entities/payment.entity';
 import { RefreshToken } from '../src/entities/refresh-token.entity';
 import { OtpCode } from '../src/entities/otp-code.entity';
+import { Order } from '../src/entities/order.entity';
 import { VoucherItem } from '../src/entities/voucher-item.entity';
 import { RefundRequest } from '../src/entities/refund-request.entity';
-import { Order } from '../src/entities/order.entity';
 import { UserStatus, CampaignStatus, OrderStatus, PaymentStatus, VoucherItemStatus, RefundRequestStatus } from '../src/common/enums/status.enum';
 import { User } from '../src/entities/user.entity';
 import { VoucherCampaign } from '../src/entities/voucher-campaign.entity';
@@ -358,6 +358,50 @@ describe('Web_BE e2e (pg-mem)', () => {
     await http.post('/api/auth/password-reset/code-request').send({ email }).expect(429);
     await ds.getRepository(OtpCode).update({ email }, { createdAt: new Date(Date.now() - 3600001) });
     await http.post('/api/auth/password-reset/code-request').send({ email }).expect(201);
+  });
+
+  it('tai khoan cu chua co mat khau nhung da mua hang: khong dang ky de hon duoc, phai dat mat khau qua email', async () => {
+    const email = 'old-otp-customer@example.com';
+    const user = await ds.getRepository(User).save({ email, role: 'CUSTOMER' as any, status: UserStatus.ACTIVE });
+    await ds.getRepository(Order).save({
+      userId: user.id, campaignId: ID.campPublished, quantity: 1, unitPrice: 80000, totalAmount: 80000,
+      status: 'FULFILLED' as any, paymentOrderCode: String(Date.now()), reservedUntil: new Date(),
+    });
+    expect((await http.post('/api/auth/check-email').send({ email }).expect(201)).body.data.registered).toBe(true);
+    await http.post('/api/auth/register').send({ email, password: 'ke-gian-1' }).expect(409);
+    await http.post('/api/auth/password-reset/code-request').send({ email }).expect(201);
+    const code = emails[emails.length - 1].text.match(/\b\d{6}\b/)![0];
+    expect(emails[emails.length - 1].to).toBe(email);
+    await http.post('/api/auth/password-reset/code-confirm').send({ email, code, password: 'chinh-chu-1' }).expect(201);
+    await http.post('/api/auth/login').send({ email, password: 'chinh-chu-1' }).expect(201);
+  });
+
+  it('doi mat khau: sai mat khau cu bi tu choi, dung thi doi va dang xuat thiet bi khac', async () => {
+    const email = 'change-pass@example.com';
+    const other = (await http.post('/api/auth/register').send({ email, password: 'matkhau-cu' }).expect(201)).body.data;
+    const here = (await http.post('/api/auth/login').send({ email, password: 'matkhau-cu' }).expect(201)).body.data;
+    const headers = { Authorization: 'Bearer ' + here.accessToken };
+    await http.post('/api/auth/change-password').set(headers).send({ currentPassword: 'sai-mat-khau', newPassword: 'matkhau-moi' }).expect(400);
+    await http.post('/api/auth/change-password').set(headers).send({ currentPassword: 'matkhau-cu', newPassword: 'matkhau-cu' }).expect(400);
+    await http.post('/api/auth/change-password').send({ currentPassword: 'matkhau-cu', newPassword: 'matkhau-moi' }).expect(401);
+    await http.post('/api/auth/change-password').set(headers).send({ currentPassword: 'matkhau-cu', newPassword: 'matkhau-moi' }).expect(201);
+    await http.post('/api/auth/login').send({ email, password: 'matkhau-moi' }).expect(201);
+    await http.post('/api/auth/refresh').send({ refreshToken: other.refreshToken }).expect(401);
+    await http.post('/api/auth/refresh').send({ refreshToken: here.refreshToken }).expect(201);
+  });
+
+  it('gioi han tan suat: goi check-email qua nhieu lan bi chan 429, bao tieng Viet', async () => {
+    process.env.THROTTLE_DISABLED = 'false';
+    try {
+      const codes: number[] = [];
+      for (let i = 0; i < 31; i++) codes.push((await http.post('/api/auth/check-email').send({ email: 'do-email@example.com' })).status);
+      expect(codes.slice(0, 30).every((c) => c === 201)).toBe(true);
+      expect(codes[30]).toBe(429);
+      const res = await http.post('/api/auth/check-email').send({ email: 'do-email@example.com' }).expect(429);
+      expect(res.body.error.message).toContain('thao tác quá nhanh');
+    } finally {
+      process.env.THROTTLE_DISABLED = 'true';
+    }
   });
 
   it('activation sets password, expires and is one-use', async () => {

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ThrottlerModule } from '@nestjs/throttler';
 import databaseConfig from './config/typeorm.config';
 import { EntitiesModule } from './entities/entities.module';
 import { HealthController } from './health.controller';
@@ -23,6 +24,11 @@ import { WalletModule } from './modules/wallet/wallet.module';
     ConfigModule.forRoot({ isGlobal: true, load: [databaseConfig] }),
     TypeOrmModule.forRootAsync({
       useFactory: databaseConfig,
+    }),
+    ThrottlerModule.forRoot({
+      throttlers: [{ ttl: 60000, limit: 60 }],
+      skipIf: () => process.env.THROTTLE_DISABLED === 'true',
+      errorMessage: 'Bạn thao tác quá nhanh, vui lòng thử lại sau ít phút.',
     }),
     EntitiesModule,
     AuthModule,
