@@ -53,11 +53,17 @@ services:
       # F10/F11: khoa ky ma QR redeem do Render tu sinh, khong nam trong repo
       - key: REDEEM_HMAC_SECRET
         generateValue: true
-      # F12: auto = goi cong hoan (dang dung cong gia lap sandbox), manual = vao hang doi quan tri
+      # F12: payOS khong co API hoan tien nen hoan tay: yeu cau vao hang doi, quan tri vien chuyen khoan roi xac nhan
       - key: REFUND_MODE
-        value: auto
+        value: manual
       - key: REFUND_SANDBOX_RESULT
         value: success
+      # Email (ma dat lai mat khau): Render goi mien phi chan SMTP nen gui qua API Brevo.
+      # BREVO_API_KEY lay o app.brevo.com -> SMTP & API -> API keys; MAIL_FROM la sender da xac minh tren Brevo.
+      - key: BREVO_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        sync: false
       - key: DEFAULT_COMMISSION_RATE
         value: "0.1"
       - key: PAYMENT_GATEWAY
@@ -73,6 +79,6 @@ services:
         value: https://voucher-platform-api.onrender.com/api/orders/payment-return
       - key: PAYOS_CANCEL_URL
         value: https://voucher-platform-api.onrender.com/api/orders/payment-return
-      # Demo do an: cho phep gia lap thanh toan; dat false khi da cau hinh VNPay that
+      # Chi bat (true) khi kiem thu tu dong; khach that luon thanh toan qua payOS
       - key: PAYMENT_SIMULATOR
-        value: "true"
+        value: "false"

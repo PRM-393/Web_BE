@@ -83,7 +83,7 @@ Mật khẩu các tài khoản web: **`Voucher@123`**. Chỉ dùng khi phát tri
 | Khách hàng | `khach@voucher.local` | Đăng nhập bằng OTP, đã có 1 voucher ACTIVE (mã `HL-SEED-0001`) |
 
 Tổng cộng: **5 danh mục**, **5 thương hiệu đã duyệt** + 1 chờ duyệt, **14 chi nhánh** có tọa độ thật ở TP.HCM
-và Hà Nội, **15 chiến dịch** đủ ba loại `DISCOUNT` / `PREPAID` / `COMBO`.
+và Hà Nội, **15 chiến dịch** đủ hai loại `DISCOUNT` / `PREPAID`.
 
 ### Mốc thời gian của dữ liệu demo
 
@@ -97,10 +97,10 @@ Một số ca đã seed sẵn để demo:
 | Ca | Ở đâu |
 |---|---|
 | Hết hàng nhưng vẫn hiện trên app | *Giảm 30% toàn bộ menu trà* (Phúc Long) — `PUBLISHED`, tồn kho khả dụng = 0 |
-| `SOLD_OUT` thật (chỉ thấy ở portal) | *Combo 2 pizza cỡ M kèm 2 nước ép* (Pizza 4P's) |
+| `SOLD_OUT` thật (chỉ thấy ở portal) | *Voucher 2 pizza cỡ M kèm 2 nước ép* (Pizza 4P's) |
 | Sắp kết thúc bán (còn 3 ngày) | *Phiếu 200.000đ dùng tại Phúc Long* |
 | Hạn dùng đúng bằng kết thúc bán + 10 ngày (ca biên DC-10) | *Giảm 100.000đ cho hóa đơn từ 500.000đ* (Pizza 4P's) |
-| Đã kết thúc bán, voucher đã bán vẫn còn hạn (BR-15) | *Combo sữa rửa mặt và kem chống nắng* (Guardian) |
+| Đã kết thúc bán, voucher đã bán vẫn còn hạn (BR-15) | *Voucher sữa rửa mặt và kem chống nắng* (Guardian) |
 | Tạm dừng bán | *Giảm 25% sản phẩm chăm sóc da* (Guardian) |
 | Nằm ở hàng chờ duyệt của quản trị viên | *Giảm 40% vé xem phim ngày thường* (CGV) |
 | Đã duyệt, chưa tới ngày bán (chờ job `FR-CAMP-10`) | *Phiếu bắp nước 100.000đ* (CGV) |

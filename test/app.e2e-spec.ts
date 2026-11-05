@@ -4,13 +4,13 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { corsOrigin } from '../src/config/cors';
-import { DataSource } from 'typeorm';
+import { DataSource, IsNull } from 'typeorm';
 import { Payment } from '../src/entities/payment.entity';
 import { RefreshToken } from '../src/entities/refresh-token.entity';
 import { OtpCode } from '../src/entities/otp-code.entity';
+import { Order } from '../src/entities/order.entity';
 import { VoucherItem } from '../src/entities/voucher-item.entity';
 import { RefundRequest } from '../src/entities/refund-request.entity';
-import { Order } from '../src/entities/order.entity';
 import { UserStatus, CampaignStatus, OrderStatus, PaymentStatus, VoucherItemStatus, RefundRequestStatus } from '../src/common/enums/status.enum';
 import { User } from '../src/entities/user.entity';
 import { VoucherCampaign } from '../src/entities/voucher-campaign.entity';
@@ -37,11 +37,8 @@ describe('Web_BE e2e (pg-mem)', () => {
     token.owner = await t.login('owner@highlands.local');
     token.staff = await t.login('staff@highlands.local');
     token.admin = await t.login('admin@voucher.local');
-    // khach dang nhap that bang OTP qua email
-    await http.post('/api/auth/otp/request').send({ email: 'khach@voucher.local' }).expect(201);
-    const otp = emails[emails.length - 1].text.match(/\b\d{6}\b/)![0];
-    const customer = await http.post('/api/auth/otp/verify').send({ email: 'khach@voucher.local', otp }).expect(201);
-    token.customer = customer.body.data.accessToken;
+    // khach dang nhap that bang email + mat khau (seed: Voucher@123)
+    token.customer = await t.login('khach@voucher.local');
     // FR-AUTH-12: nhan vien chon chi nhanh lam viec truoc khi redeem
     await http.post('/api/auth/select-store').set(auth('staff')).send({ storeId: ID.store1 }).expect(201);
   }, 60000);
@@ -102,15 +99,16 @@ describe('Web_BE e2e (pg-mem)', () => {
   });
 
   it('tao chien dich: bat FR-CAMP-12 va luu dung truong gia tri', async () => {
+    const future = (days: number) => new Date(Date.now() + days * 86400000).toISOString();
     const base = {
       title: 'Giam 30% tra sua',
       voucherType: 'DISCOUNT',
       salePrice: 10000,
       faceValue: 50000,
       totalQuantity: 50,
-      saleStartAt: '2026-11-01T00:00:00.000Z',
-      saleEndAt: '2026-11-30T00:00:00.000Z',
-      voucherExpireAt: '2026-12-31T00:00:00.000Z',
+      saleStartAt: future(30),
+      saleEndAt: future(60),
+      voucherExpireAt: future(90),
       storeIds: [ID.store1],
     };
     // giam theo % ma thieu muc giam toi da
@@ -152,7 +150,7 @@ describe('Web_BE e2e (pg-mem)', () => {
     expect(plain.body.data.total).toBeGreaterThan(0);
     expect(plain.body.data.items.map((c: { id: string }) => c.id)).toEqual(accented.body.data.items.map((c: { id: string }) => c.id));
     const dong = await http.get('/api/vouchers').query({ keyword: 'tra sua' }).expect(200);
-    expect(dong.body.data.items.some((c: { title: string }) => c.title.includes('Trà sữa'))).toBe(true);
+    expect(dong.body.data.items.some((c: { title: string }) => c.title.toLowerCase().includes('trà sữa'))).toBe(true);
   });
 
   it('vi cua khach khong lo secretKey (NFR-SEC-05)', async () => {
@@ -306,31 +304,104 @@ describe('Web_BE e2e (pg-mem)', () => {
       await http.post('/api/auth/login').send({ email: owner.email, password: PASSWORD }).expect(401);
     } finally { await ds.getRepository(User).update(owner.id, { status: UserStatus.ACTIVE }); }
     await ds.getRepository(User).update(ID.customer, { status: UserStatus.INACTIVE });
-    try { await http.post('/api/auth/otp/request').send({ email: 'khach@voucher.local' }).expect(400); }
+    try { await http.post('/api/auth/login').send({ email: 'khach@voucher.local', password: PASSWORD }).expect(401); }
     finally { await ds.getRepository(User).update(ID.customer, { status: UserStatus.ACTIVE }); }
   });
 
-  it('OTP is hashed, one-use, limited after successful login, and limit expires after one hour', async () => {
-    const email = 'limits@example.com';
-    await http.post('/api/auth/otp/request').send({ email }).expect(201);
-    const otp = emails[emails.length - 1].text.match(/\b\d{6}\b/)![0];
-    const record = await ds.getRepository(OtpCode).findOneByOrFail({ email });
-    expect(record.codeHash).not.toBe(otp);
-    await http.post('/api/auth/otp/verify').send({ email, otp }).expect(201);
-    await http.post('/api/auth/otp/verify').send({ email, otp }).expect(401);
-    for (let i = 0; i < 4; i++) await http.post('/api/auth/otp/request').send({ email }).expect(201);
-    await http.post('/api/auth/otp/request').send({ email }).expect(429);
-    await ds.getRepository(OtpCode).update({ email }, { createdAt: new Date(Date.now() - 3600001) });
-    await http.post('/api/auth/otp/request').send({ email }).expect(201);
+  it('FR-AUTH-01 khach: kiem tra email -> dang ky bang mat khau (khong can xac thuc) -> dang nhap', async () => {
+    const email = 'new-customer@example.com';
+    expect((await http.post('/api/auth/check-email').send({ email }).expect(201)).body.data.registered).toBe(false);
+    await http.post('/api/auth/register').send({ email, password: '123' }).expect(400);
+    const created = await http.post('/api/auth/register').send({ email: 'New-Customer@Example.com', password: 'matkhau1', fullName: 'Khach Moi' }).expect(201);
+    expect(created.body.data.accessToken).toBeTruthy();
+    expect(created.body.data.user).toMatchObject({ email, role: 'CUSTOMER', fullName: 'Khach Moi' });
+    expect((await http.post('/api/auth/check-email').send({ email }).expect(201)).body.data.registered).toBe(true);
+    await http.post('/api/auth/register').send({ email, password: 'matkhau2' }).expect(409);
+    const user = await ds.getRepository(User).findOneByOrFail({ email });
+    expect(user.passwordHash).not.toBe('matkhau1');
+    const session = await http.post('/api/auth/login').send({ email, password: 'matkhau1' }).expect(201);
+    expect(session.body.data.user.role).toBe('CUSTOMER');
+    await http.post('/api/auth/login').send({ email, password: 'sai-mat-khau' }).expect(401);
+    // email cua nhan vien da co mat khau: khong dang ky lai duoc
+    await http.post('/api/auth/register').send({ email: 'staff@highlands.local', password: 'matkhau1' }).expect(409);
+    expect(emails.some((m) => m.to === email)).toBe(false);
   });
 
-  it('five wrong OTP attempts invalidate a correct code', async () => {
-    const email = 'attempts@example.com';
-    await http.post('/api/auth/otp/request').send({ email }).expect(201);
-    const otp = emails[emails.length - 1].text.match(/\b\d{6}\b/)![0];
-    const wrong = otp === '111111' ? '222222' : '111111';
-    for (let i = 0; i < 5; i++) await http.post('/api/auth/otp/verify').send({ email, otp: wrong }).expect(401);
-    await http.post('/api/auth/otp/verify').send({ email, otp }).expect(401);
+  it('FR-AUTH-09 quen mat khau: ma 6 so qua email, dung mot lan, doi xong thu hoi moi phien', async () => {
+    const email = 'forgot@example.com';
+    const old = (await http.post('/api/auth/register').send({ email, password: 'matkhau-cu' }).expect(201)).body.data;
+    const before = emails.length;
+    await http.post('/api/auth/password-reset/code-request').send({ email: 'chua-dang-ky@example.com' }).expect(201);
+    expect(emails.length).toBe(before);
+    await http.post('/api/auth/password-reset/code-request').send({ email }).expect(201);
+    const code = emails[emails.length - 1].text.match(/\b\d{6}\b/)![0];
+    const record = await ds.getRepository(OtpCode).findOneByOrFail({ email, usedAt: IsNull() });
+    expect(record.codeHash).not.toBe(code);
+    const wrong = code === '111111' ? '222222' : '111111';
+    await http.post('/api/auth/password-reset/code-confirm').send({ email, code: wrong, password: 'matkhau-moi' }).expect(400);
+    await http.post('/api/auth/password-reset/code-confirm').send({ email, code, password: 'matkhau-moi' }).expect(201);
+    await http.post('/api/auth/password-reset/code-confirm').send({ email, code, password: 'matkhau-khac' }).expect(400);
+    await http.post('/api/auth/refresh').send({ refreshToken: old.refreshToken }).expect(401);
+    await http.post('/api/auth/login').send({ email, password: 'matkhau-cu' }).expect(401);
+    await http.post('/api/auth/login').send({ email, password: 'matkhau-moi' }).expect(201);
+  });
+
+  it('FR-AUTH-09 ma dat lai: sai 5 lan thi huy ma, gioi han 5 lan gui moi gio', async () => {
+    const email = 'reset-limit@example.com';
+    await http.post('/api/auth/register').send({ email, password: 'matkhau1' }).expect(201);
+    await http.post('/api/auth/password-reset/code-request').send({ email }).expect(201);
+    const code = emails[emails.length - 1].text.match(/\b\d{6}\b/)![0];
+    const wrong = code === '111111' ? '222222' : '111111';
+    for (let i = 0; i < 5; i++) await http.post('/api/auth/password-reset/code-confirm').send({ email, code: wrong, password: 'matkhau2' }).expect(400);
+    await http.post('/api/auth/password-reset/code-confirm').send({ email, code, password: 'matkhau2' }).expect(400);
+    for (let i = 0; i < 4; i++) await http.post('/api/auth/password-reset/code-request').send({ email }).expect(201);
+    await http.post('/api/auth/password-reset/code-request').send({ email }).expect(429);
+    await ds.getRepository(OtpCode).update({ email }, { createdAt: new Date(Date.now() - 3600001) });
+    await http.post('/api/auth/password-reset/code-request').send({ email }).expect(201);
+  });
+
+  it('tai khoan cu chua co mat khau nhung da mua hang: khong dang ky de hon duoc, phai dat mat khau qua email', async () => {
+    const email = 'old-otp-customer@example.com';
+    const user = await ds.getRepository(User).save({ email, role: 'CUSTOMER' as any, status: UserStatus.ACTIVE });
+    await ds.getRepository(Order).save({
+      userId: user.id, campaignId: ID.campPublished, quantity: 1, unitPrice: 80000, totalAmount: 80000,
+      status: 'FULFILLED' as any, paymentOrderCode: String(Date.now()), reservedUntil: new Date(),
+    });
+    expect((await http.post('/api/auth/check-email').send({ email }).expect(201)).body.data.registered).toBe(true);
+    await http.post('/api/auth/register').send({ email, password: 'ke-gian-1' }).expect(409);
+    await http.post('/api/auth/password-reset/code-request').send({ email }).expect(201);
+    const code = emails[emails.length - 1].text.match(/\b\d{6}\b/)![0];
+    expect(emails[emails.length - 1].to).toBe(email);
+    await http.post('/api/auth/password-reset/code-confirm').send({ email, code, password: 'chinh-chu-1' }).expect(201);
+    await http.post('/api/auth/login').send({ email, password: 'chinh-chu-1' }).expect(201);
+  });
+
+  it('doi mat khau: sai mat khau cu bi tu choi, dung thi doi va dang xuat thiet bi khac', async () => {
+    const email = 'change-pass@example.com';
+    const other = (await http.post('/api/auth/register').send({ email, password: 'matkhau-cu' }).expect(201)).body.data;
+    const here = (await http.post('/api/auth/login').send({ email, password: 'matkhau-cu' }).expect(201)).body.data;
+    const headers = { Authorization: 'Bearer ' + here.accessToken };
+    await http.post('/api/auth/change-password').set(headers).send({ currentPassword: 'sai-mat-khau', newPassword: 'matkhau-moi' }).expect(400);
+    await http.post('/api/auth/change-password').set(headers).send({ currentPassword: 'matkhau-cu', newPassword: 'matkhau-cu' }).expect(400);
+    await http.post('/api/auth/change-password').send({ currentPassword: 'matkhau-cu', newPassword: 'matkhau-moi' }).expect(401);
+    await http.post('/api/auth/change-password').set(headers).send({ currentPassword: 'matkhau-cu', newPassword: 'matkhau-moi' }).expect(201);
+    await http.post('/api/auth/login').send({ email, password: 'matkhau-moi' }).expect(201);
+    await http.post('/api/auth/refresh').send({ refreshToken: other.refreshToken }).expect(401);
+    await http.post('/api/auth/refresh').send({ refreshToken: here.refreshToken }).expect(201);
+  });
+
+  it('gioi han tan suat: goi check-email qua nhieu lan bi chan 429, bao tieng Viet', async () => {
+    process.env.THROTTLE_DISABLED = 'false';
+    try {
+      const codes: number[] = [];
+      for (let i = 0; i < 31; i++) codes.push((await http.post('/api/auth/check-email').send({ email: 'do-email@example.com' })).status);
+      expect(codes.slice(0, 30).every((c) => c === 201)).toBe(true);
+      expect(codes[30]).toBe(429);
+      const res = await http.post('/api/auth/check-email').send({ email: 'do-email@example.com' }).expect(429);
+      expect(res.body.error.message).toContain('thao tác quá nhanh');
+    } finally {
+      process.env.THROTTLE_DISABLED = 'true';
+    }
   });
 
   it('activation sets password, expires and is one-use', async () => {

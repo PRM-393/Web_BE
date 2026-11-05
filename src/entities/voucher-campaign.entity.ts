@@ -65,9 +65,6 @@ export class VoucherCampaign {
   @Column({ type: 'bigint', nullable: true })
   maxDiscount: number | null;
 
-  // COMBO: mo ta noi dung goi
-  @Column({ type: 'text', nullable: true })
-  comboItems: string | null;
 
   @Column({ type: 'int' })
   totalQuantity: number;

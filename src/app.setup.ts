@@ -6,6 +6,8 @@ import { corsOrigin } from './config/cors';
 
 // Cau hinh dung chung cho main.ts va test e2e, de chay that va chay test giong het nhau
 export function configureApp(app: INestApplication) {
+  // Chay sau proxy cua Render: lay IP that cua khach de gioi han tan suat theo tung nguoi, khong chung IP proxy
+  app.getHttpAdapter().getInstance().set?.('trust proxy', 1);
   app.setGlobalPrefix(process.env.API_PREFIX || 'api');
   app.enableCors({ origin: corsOrigin(), credentials: true });
 

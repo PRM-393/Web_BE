@@ -35,6 +35,23 @@ export class RefundController {
     return this.refundService.findManualPending();
   }
 
+  // Tien da nhan cua don khong phat hanh duoc voucher (het hang, tra trung), cho hoan tay
+  @Roles(Role.ADMIN)
+  @Get('pending-payments')
+  pendingPayments() {
+    return this.refundService.findPendingPaymentRefunds();
+  }
+
+  @Roles(Role.ADMIN)
+  @Patch('pending-payments/:id/confirm')
+  confirmPayment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserPayload,
+    @Body() dto: ConfirmRefundDto,
+  ) {
+    return this.refundService.confirmPaymentRefund(id, user.userId, dto.gatewayRefundId);
+  }
+
   // Da hoan tay: bat buoc nhap ma giao dich hoan
   @Roles(Role.ADMIN)
   @Patch(':id/confirm-manual')

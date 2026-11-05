@@ -174,7 +174,7 @@ describe('F09 - mua va thanh toan (e2e)', () => {
     // Chien dich moi: Hoa dat, bi huy vi qua han, nguoi khac mua mat suat cuoi -> Hoa thanh toan muon bi hoan 100%
     const c2 = await newCampaign(1, 1);
     const hoa = (await placeOrder('hoa', c2.id, 1)).data.order;
-    await service.cancelExpiredOrders(new Date(Date.now() + 16 * 60 * 1000));
+    await t.app.get(OrderService).cancelExpiredOrders(new Date(Date.now() + 16 * 60 * 1000));
     const other = (await placeOrder('giang', c2.id, 1)).data.order;
     expect((await webhook(other).expect(200)).body.outcome).toBe('FULFILLED');
 
@@ -220,11 +220,146 @@ describe('F09 - mua va thanh toan (e2e)', () => {
 
     process.env.PAYMENT_SIMULATOR = 'false';
     await t.http.post(`/api/orders/${o.id}/simulate-payment`).set(auth('oanh')).send({}).expect(403);
+    // khong co khoa payOS va tat gia lap: khong tao don giu cho ma khach khong the thanh toan
+    const blocked = await t.http.post('/api/orders').set(auth('oanh')).send({ campaignId: c.id, quantity: 1 }).expect(503);
+    expect(blocked.body.error.message).toContain('payOS');
 
     process.env.PAYMENT_SIMULATOR = 'true';
     const res = await t.http.post(`/api/orders/${o.id}/simulate-payment`).set(auth('oanh')).send({}).expect(201);
     expect(res.body.data.outcome).toBe('FULFILLED');
     expect(res.body.data.order.status).toBe(OrderStatus.FULFILLED);
+  });
+
+  it('payOS: tao link that, app hoi trang thai thi may chu hoi lai payOS va phat hanh voucher (khong can webhook)', async () => {
+    await newCustomer('phuong');
+    const c = await newCampaign(5, 2);
+    const keys = ['PAYOS_CLIENT_ID', 'PAYOS_API_KEY', 'PAYOS_CHECKSUM_KEY'] as const;
+    for (const k of keys) process.env[k] = 'test-' + k;
+    const realFetch = global.fetch;
+    let payosStatus = 'PENDING';
+    const calls: string[] = [];
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      calls.push(`${init?.method ?? 'GET'} ${url}`);
+      if (init?.method === 'POST') {
+        return new Response(JSON.stringify({ code: '00', data: { checkoutUrl: 'https://pay.payos.vn/web/test' } }));
+      }
+      const total = (await t.dataSource.getRepository(Order).findOneByOrFail({ userId: (await t.dataSource.getRepository(User).findOneByOrFail({ email: 'phuong@test.local' })).id })).totalAmount;
+      return new Response(JSON.stringify({ code: '00', data: { status: payosStatus, amountPaid: payosStatus === 'PAID' ? Number(total) : 0, transactions: payosStatus === 'PAID' ? [{ reference: 'FT123' }] : [] } }));
+    }) as typeof fetch;
+    try {
+      const created = (await placeOrder('phuong', c.id, 1)).data;
+      expect(created.paymentUrl).toBe('https://pay.payos.vn/web/test');
+      const id = created.order.id;
+      expect((await t.http.get(`/api/orders/${id}`).set(auth('phuong')).expect(200)).body.data.status).toBe(OrderStatus.PENDING);
+      payosStatus = 'PAID';
+      // hoi lai trong 4 giay dau: chua goi payOS lan nua
+      expect((await t.http.get(`/api/orders/${id}`).set(auth('phuong')).expect(200)).body.data.status).toBe(OrderStatus.PENDING);
+      (t.app.get(OrderService) as any).lastPayosSync.clear();
+      const paid = await t.http.get(`/api/orders/${id}`).set(auth('phuong')).expect(200);
+      expect(paid.body.data.status).toBe(OrderStatus.FULFILLED);
+      expect(await t.dataSource.getRepository(VoucherItem).count({ where: { orderId: id } })).toBe(1);
+      expect(calls.filter((x) => x.startsWith('GET')).length).toBe(2);
+    } finally {
+      global.fetch = realFetch;
+      for (const k of keys) delete process.env[k];
+    }
+  });
+
+  it('trang payOS chuyen khach ve mo duoc khi chua dang nhap va co link quay lai app', async () => {
+    const res = await t.http.get('/api/orders/payment-return').query({ status: 'PAID', cancel: 'false' }).expect(200);
+    expect(res.headers['content-type']).toContain('text/html');
+    expect(res.text).toContain('voucherplatform://payment-return');
+  });
+
+  it('BR-01: voucher da hoan tien khong tinh vao gioi han, khach mua lai duoc', async () => {
+    const user = await newCustomer('quy');
+    const c = await newCampaign(5, 1);
+    const first = (await placeOrder('quy', c.id, 1)).data.order;
+    await webhook(first).expect(200);
+    await placeOrder('quy', c.id, 1, 400);
+    await ds.getRepository(VoucherItem).update({ userId: user.id, campaignId: c.id }, { status: 'REFUNDED' as any });
+    await placeOrder('quy', c.id, 1);
+    await placeOrder('quy', c.id, 1, 400); // don dang giu cho van tinh
+  });
+
+  describe('tien that qua payOS (co khoa payOS)', () => {
+    const keys = ['PAYOS_CLIENT_ID', 'PAYOS_API_KEY', 'PAYOS_CHECKSUM_KEY'] as const;
+    const realFetch = global.fetch;
+    let payosStatus = 'PENDING';
+    let payosDown = false;
+    let amountPaid = 0;
+    beforeEach(() => {
+      for (const k of keys) process.env[k] = 'test-' + k;
+      payosStatus = 'PENDING';
+      payosDown = false;
+      global.fetch = (async (_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') return new Response(JSON.stringify({ code: '00', data: { checkoutUrl: 'https://pay.payos.vn/web/test' } }));
+        if (payosDown) throw new Error('payOS down');
+        return new Response(JSON.stringify({ code: '00', data: { status: payosStatus, amountPaid, transactions: payosStatus === 'PAID' ? [{ reference: 'FT-' + Date.now() }] : [] } }));
+      }) as typeof fetch;
+    });
+    afterEach(() => {
+      global.fetch = realFetch;
+      for (const k of keys) delete process.env[k];
+    });
+
+    it('khoi hoan tu dong gia: khach yeu cau hoan thi vao hang doi quan tri, khong bao thanh cong', async () => {
+      await newCustomer('rin');
+      const c = await newCampaign(5, 2);
+      const o = (await placeOrder('rin', c.id, 1)).data.order;
+      await webhook(o).expect(200);
+      const item = await ds.getRepository(VoucherItem).findOneByOrFail({ orderId: o.id });
+      const res = await t.http.post('/api/refunds').set(auth('rin')).send({ voucherItemId: item.id }).expect(201);
+      expect(res.body.data.status).toBe('MANUAL_PENDING');
+      expect((await ds.getRepository(VoucherItem).findOneByOrFail({ id: item.id })).status).toBe('REFUND_PENDING');
+    });
+
+    it('het hang khi tien den muon: tao khoan cho hoan, admin xac nhan moi xong', async () => {
+      await newCustomer('son');
+      await newCustomer('tam');
+      const c = await newCampaign(1, 1);
+      const late = (await placeOrder('son', c.id, 1)).data.order;
+      payosDown = false;
+      await ds.getRepository(Order).update(late.id, { paymentUrl: null as any });
+      await t.app.get(OrderService).cancelExpiredOrders(new Date(Date.now() + 16 * 60 * 1000));
+      const other = (await placeOrder('tam', c.id, 1)).data.order;
+      await webhook(other).expect(200);
+      expect((await webhook(late).expect(200)).body.outcome).toBe('REFUNDED_OVERSOLD');
+
+      const admin = await t.login('admin@voucher.local');
+      const headers = { Authorization: 'Bearer ' + admin };
+      const queue = await t.http.get('/api/refunds/pending-payments').set(headers).expect(200);
+      const line = queue.body.data.find((r: { orderId: string }) => r.orderId === late.id);
+      expect(line).toMatchObject({ reasonType: 'OVERSOLD', amount: Number(late.totalAmount) });
+      expect(line.customer.email).toBe('son@test.local');
+      await t.http.get('/api/refunds/pending-payments').set(auth('son')).expect(403);
+      await t.http.patch('/api/refunds/pending-payments/' + line.id + '/confirm').set(headers).send({ gatewayRefundId: 'NH-123' }).expect(200);
+      await t.http.patch('/api/refunds/pending-payments/' + line.id + '/confirm').set(headers).send({ gatewayRefundId: 'NH-123' }).expect(400);
+      expect(Number((await order(late.id)).refundedAmount)).toBe(Number(late.totalAmount));
+      const after = await t.http.get('/api/refunds/pending-payments').set(headers).expect(200);
+      expect(after.body.data.some((r: { id: string }) => r.id === line.id)).toBe(false);
+    });
+
+    it('job huy don: khach da tra tien ma webhook khong toi thi phat hanh voucher, khong huy', async () => {
+      await newCustomer('uyen');
+      const c = await newCampaign(5, 2);
+      const o = (await placeOrder('uyen', c.id, 1)).data.order;
+      payosStatus = 'PAID';
+      amountPaid = Number(o.totalAmount);
+      await t.app.get(OrderService).cancelExpiredOrders(new Date(Date.now() + 16 * 60 * 1000));
+      expect((await order(o.id)).status).toBe(OrderStatus.FULFILLED);
+    });
+
+    it('job huy don: khong hoi duoc payOS thi cho lan sau, qua 1 gio moi huy', async () => {
+      await newCustomer('van');
+      const c = await newCampaign(5, 2);
+      const o = (await placeOrder('van', c.id, 1)).data.order;
+      payosDown = true;
+      await t.app.get(OrderService).cancelExpiredOrders(new Date(Date.now() + 16 * 60 * 1000));
+      expect((await order(o.id)).status).toBe(OrderStatus.PENDING);
+      await t.app.get(OrderService).cancelExpiredOrders(new Date(Date.now() + 90 * 60 * 1000));
+      expect((await order(o.id)).status).toBe(OrderStatus.CANCELLED);
+    });
   });
 
   it('webhook payOS: chu ky sai bi bo qua, orderCode la (payOS gui thu) tra 200', async () => {

@@ -28,7 +28,6 @@ export enum CampaignStatus {
 export enum VoucherType {
   DISCOUNT = 'DISCOUNT', // ma giam gia: discountType + discountValue (+ maxDiscount khi PERCENT)
   PREPAID = 'PREPAID', // voucher menh gia tra truoc: faceValue > salePrice
-  COMBO = 'COMBO', // combo / goi dich vu: comboItems, faceValue = gia niem yet cua goi
 }
 
 export enum DiscountType {

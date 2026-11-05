@@ -1,6 +1,6 @@
-import { Injectable, UnauthorizedException, BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, ConflictException, HttpException, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, IsNull, MoreThan, Repository } from 'typeorm';
+import { DataSource, EntityManager, IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { createHash, randomInt, randomUUID, randomBytes } from 'crypto';
@@ -8,12 +8,11 @@ import { AuditLog } from '../../entities/audit-log.entity';
 import { User } from '../../entities/user.entity';
 import { RefreshToken } from '../../entities/refresh-token.entity';
 import { OtpCode } from '../../entities/otp-code.entity';
+import { Order } from '../../entities/order.entity';
 import { StaffAssignment } from '../../entities/staff-assignment.entity';
 import { Role } from '../../common/enums/role.enum';
 import { OtpPurpose, UserStatus } from '../../common/enums/status.enum';
 import { RegisterDto } from './dto/register.dto';
-import { RequestOtpDto } from './dto/request-otp.dto';
-import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { LoginDto } from './dto/login.dto';
 import { MailService } from './mail.service';
 
@@ -29,67 +28,44 @@ export class AuthService {
     private readonly mail: MailService,
   ) {}
 
+  // FR-AUTH-01: man dang nhap app hoi email truoc - da co mat khau thi nhap mat khau, chua co thi chuyen sang dang ky.
+  async checkEmail(email: string) {
+    const user = await this.userRepo.findOne({ where: { email: normalize(email) } });
+    if (!user) return { registered: false };
+    if (user.passwordHash || user.role !== Role.CUSTOMER) return { registered: true };
+    // Tai khoan khach cu chua co mat khau nhung da mua hang: phai xac minh email qua "Quen mat khau"
+    return { registered: (await this.dataSource.getRepository(Order).count({ where: { userId: user.id } })) > 0 };
+  }
+
+  // FR-AUTH-01: khach tu dang ky bang email + mat khau, khong can xac thuc email; dang nhap luon sau khi tao.
+  // Tai khoan khach cu chua co mat khau va chua mua gi duoc dat mat khau tai day. Da co don hang thi khong:
+  // neu khong, ai biet email cung chiem duoc vi voucher; chu tai khoan dat mat khau qua ma gui ve email.
   async register(dto: RegisterDto) {
     const email = normalize(dto.email);
-    const user = await this.userRepo.findOne({ where: { email } });
-    if (!user) await this.userRepo.save(this.userRepo.create({ email, fullName: dto.fullName, role: Role.CUSTOMER }));
-    return this.requestOtp({ email });
-  }
-
-  async requestOtp(dto: RequestOtpDto) {
-    const email = normalize(dto.email);
-    await this.userRepo.createQueryBuilder().insert().into(User)
-      .values({ email, role: Role.CUSTOMER }).orIgnore().execute();
-    // Serialize per account: limits persist across process restarts and successful logins.
-    await this.dataSource.transaction(async (manager) => {
-      const user = await manager.findOne(User, { where: { email }, lock: { mode: 'pessimistic_write' } });
-      if (!user || user.role !== Role.CUSTOMER || user.status !== UserStatus.ACTIVE) {
-        throw new BadRequestException('Tài khoản không thể đăng nhập bằng OTP.');
+    const passwordHash = await bcrypt.hash(dto.password, 12);
+    return this.dataSource.transaction(async (manager) => {
+      await manager.createQueryBuilder().insert().into(User)
+        .values({ email, role: Role.CUSTOMER, fullName: dto.fullName?.trim() || undefined }).orIgnore().execute();
+      const user = await manager.findOneOrFail(User, { where: { email }, lock: { mode: 'pessimistic_write' } });
+      if (user.passwordHash) throw new ConflictException('Email đã được đăng ký. Vui lòng đăng nhập.');
+      if (user.role !== Role.CUSTOMER || user.status !== UserStatus.ACTIVE) {
+        throw new BadRequestException('Email này không thể đăng ký tài khoản khách hàng.');
       }
-      const count = await manager.count(OtpCode, {
-        where: { email, purpose: OtpPurpose.LOGIN, createdAt: MoreThan(new Date(Date.now() - 3600000)) },
-      });
-      if (count >= Number(process.env.OTP_MAX_REQUESTS_PER_HOUR || 5)) {
-        throw new HttpException('Bạn đã yêu cầu OTP quá nhiều lần. Vui lòng thử lại sau một giờ.', HttpStatus.TOO_MANY_REQUESTS);
+      if (await manager.count(Order, { where: { userId: user.id } })) {
+        throw new ConflictException('Email đã có đơn hàng. Vui lòng dùng "Quên mật khẩu" để đặt mật khẩu qua email.');
       }
-      const code = randomInt(100000, 1000000).toString();
-      await manager.update(OtpCode, { email, purpose: OtpPurpose.LOGIN, usedAt: IsNull() }, { usedAt: new Date() });
-      await manager.save(OtpCode, manager.create(OtpCode, {
-        email, purpose: OtpPurpose.LOGIN, codeHash: await bcrypt.hash(code, 10),
-        expiresAt: new Date(Date.now() + 5 * 60000),
-      }));
-      await this.mail.send(email, 'Mã đăng nhập Voucher Platform', 'Mã OTP của bạn là ' + code + '. Mã có hiệu lực 5 phút. Không chia sẻ mã này.');
-    });
-    return { message: 'Mã OTP đã được gửi qua email.' };
-  }
-
-  async verifyOtp(dto: VerifyOtpDto) {
-    const email = normalize(dto.email);
-    const result = await this.dataSource.transaction(async (manager) => {
-      const user = await manager.findOne(User, { where: { email }, lock: { mode: 'pessimistic_write' } });
-      if (!user || user.role !== Role.CUSTOMER || user.status !== UserStatus.ACTIVE) return null;
-      const record = await manager.findOne(OtpCode, {
-        where: { email, purpose: OtpPurpose.LOGIN, usedAt: IsNull() }, order: { createdAt: 'DESC' },
-      });
-      if (!record || record.expiresAt <= new Date() || record.attempts >= 5) return null;
-      if (!(await bcrypt.compare(dto.otp, record.codeHash))) {
-        record.attempts++;
-        await manager.save(record); // Commit attempts before throwing outside the transaction.
-        return null;
-      }
-      record.usedAt = new Date();
-      await manager.save(record);
+      user.passwordHash = passwordHash;
+      if (dto.fullName?.trim() && !user.fullName) user.fullName = dto.fullName.trim();
+      await manager.save(user);
       return this.issueTokens(user, dto.deviceId, manager);
     });
-    if (!result) throw new UnauthorizedException('Mã OTP không hợp lệ, đã hết hạn hoặc đã nhập sai quá 5 lần.');
-    return result;
   }
 
   async login(dto: LoginDto) {
     const email = normalize(dto.email);
     const result = await this.dataSource.transaction(async (manager) => {
       const user = await manager.findOne(User, { where: { email }, lock: { mode: 'pessimistic_write' } });
-      if (!user || !user.passwordHash || user.role === Role.CUSTOMER || user.status !== UserStatus.ACTIVE) return null;
+      if (!user || !user.passwordHash || user.status !== UserStatus.ACTIVE) return null;
       // Rate-limit password attempts using audit events, without storing passwords.
       const recent = await manager.count(AuditLog, { where: {
         actorUserId: user.id, action: 'LOGIN_FAILURE',
@@ -214,6 +190,77 @@ export class AuthService {
       await manager.update(RefreshToken, { userId: user.id, revokedAt: IsNull() }, { revokedAt: new Date() });
     });
     return { message: 'Đã đổi mật khẩu. Vui lòng đăng nhập lại trên các thiết bị.' };
+  }
+
+  // FR-AUTH-09 (app): quen mat khau - gui ma 6 so qua email, hieu luc 15 phut, sai 5 lan thi ma bi huy.
+  async requestResetCode(email: string) {
+    const message = 'Nếu email đã đăng ký, mã xác thực sẽ được gửi trong ít phút.';
+    await this.dataSource.transaction(async (manager) => {
+      const user = await manager.findOne(User, { where: { email: normalize(email) }, lock: { mode: 'pessimistic_write' } });
+      if (!user || user.status !== UserStatus.ACTIVE) return;
+      const recent = await manager.count(OtpCode, { where: { email: user.email, purpose: OtpPurpose.RESET_PASSWORD, createdAt: MoreThan(new Date(Date.now() - 3600000)) } });
+      if (recent >= Number(process.env.OTP_MAX_REQUESTS_PER_HOUR || 5)) {
+        throw new HttpException('Bạn đã yêu cầu mã quá nhiều lần. Vui lòng thử lại sau một giờ.', HttpStatus.TOO_MANY_REQUESTS);
+      }
+      const code = randomInt(100000, 1000000).toString();
+      await manager.update(OtpCode, { email: user.email, purpose: OtpPurpose.RESET_PASSWORD, usedAt: IsNull() }, { usedAt: new Date() });
+      await manager.save(OtpCode, manager.create(OtpCode, {
+        email: user.email, purpose: OtpPurpose.RESET_PASSWORD, codeHash: await bcrypt.hash(code, 10),
+        expiresAt: new Date(Date.now() + 15 * 60000),
+      }));
+      await this.mail.send(user.email, 'Mã đặt lại mật khẩu Voucher Platform',
+        'Mã xác thực của bạn là ' + code + '. Mã có hiệu lực 15 phút. Nếu bạn không yêu cầu đặt lại mật khẩu, hãy bỏ qua email này.');
+    });
+    return { message };
+  }
+
+  async resetWithCode(email: string, code: string, password: string) {
+    const ok = await this.dataSource.transaction(async (manager) => {
+      const user = await manager.findOne(User, { where: { email: normalize(email), status: UserStatus.ACTIVE }, lock: { mode: 'pessimistic_write' } });
+      if (!user) return false;
+      const record = await manager.findOne(OtpCode, {
+        where: { email: user.email, purpose: OtpPurpose.RESET_PASSWORD, usedAt: IsNull() }, order: { createdAt: 'DESC' },
+      });
+      if (!record || record.expiresAt <= new Date() || record.attempts >= 5) return false;
+      if (!(await bcrypt.compare(code, record.codeHash))) {
+        record.attempts++;
+        await manager.save(record); // luu so lan sai truoc khi bao loi
+        return false;
+      }
+      user.passwordHash = await bcrypt.hash(password, 12);
+      record.usedAt = new Date();
+      await manager.save(user);
+      await manager.save(record);
+      await manager.update(RefreshToken, { userId: user.id, revokedAt: IsNull() }, { revokedAt: new Date() });
+      return true;
+    });
+    if (!ok) throw new BadRequestException('Mã xác thực không đúng, đã hết hạn hoặc đã nhập sai quá 5 lần.');
+    return { message: 'Đã đổi mật khẩu. Vui lòng đăng nhập bằng mật khẩu mới.' };
+  }
+
+  // Doi mat khau khi dang dang nhap: phai dung mat khau hien tai; cac thiet bi khac bi dang xuat, thiet bi nay giu phien
+  async changePassword(userId: string, sessionId: string, currentPassword: string, newPassword: string) {
+    if (currentPassword === newPassword) throw new BadRequestException('Mật khẩu mới phải khác mật khẩu hiện tại.');
+    const ok = await this.dataSource.transaction(async (manager) => {
+      const user = await manager.findOneOrFail(User, { where: { id: userId }, lock: { mode: 'pessimistic_write' } });
+      const recent = await manager.count(AuditLog, { where: {
+        actorUserId: user.id, action: 'LOGIN_FAILURE', createdAt: MoreThan(new Date(Date.now() - 15 * 60000)),
+      } });
+      if (recent >= 5 || !user.passwordHash) return false;
+      if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
+        await manager.save(AuditLog, manager.create(AuditLog, {
+          actorUserId: user.id, action: 'LOGIN_FAILURE', entityType: 'User', entityId: user.id,
+        }));
+        return false;
+      }
+      user.passwordHash = await bcrypt.hash(newPassword, 12);
+      await manager.save(user);
+      await manager.update(RefreshToken, { userId: user.id, revokedAt: IsNull(), id: Not(sessionId) }, { revokedAt: new Date() });
+      return true;
+    });
+    // Khong dung 401: app se hieu nham la het phien dang nhap
+    if (!ok) throw new BadRequestException('Mật khẩu hiện tại không đúng hoặc đã nhập sai quá nhiều lần. Vui lòng thử lại sau 15 phút.');
+    return { message: 'Đã đổi mật khẩu.' };
   }
 
   private async issueTokens(user: User, deviceId: string | undefined, manager: EntityManager, previous?: RefreshToken) {

@@ -5,6 +5,7 @@ import {
   IsDateString,
   IsEnum,
   IsInt,
+  IsIn,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -36,8 +37,10 @@ export class CreateCampaignDto {
   @IsString()
   terms?: string;
 
-  @ApiProperty({ enum: VoucherType })
-  @IsEnum(VoucherType)
+  @ApiProperty({ enum: [VoucherType.DISCOUNT, VoucherType.PREPAID] })
+  @IsIn([VoucherType.DISCOUNT, VoucherType.PREPAID], {
+    message: 'Loại voucher chỉ có thể là Mã giảm giá hoặc Voucher mệnh giá trả trước.',
+  })
   voucherType: VoucherType;
 
   // gia ban phai lon hon 0 (FR-CAMP-12)
@@ -73,11 +76,6 @@ export class CreateCampaignDto {
   @IsInt()
   @Min(1)
   maxDiscount?: number;
-
-  @ApiProperty({ required: false, description: 'Noi dung goi, bat buoc khi voucherType = COMBO' })
-  @IsOptional()
-  @IsString()
-  comboItems?: string;
 
   @ApiProperty()
   @IsInt()

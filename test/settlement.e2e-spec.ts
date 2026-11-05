@@ -1,3 +1,5 @@
+import { SettlementService } from '../src/modules/settlement/settlement.service';
+import { SettlementItem } from '../src/entities/settlement-item.entity';
 // F13 / BR-14: phieu doi soat chi gom voucher da het quyen hoan TAI THOI DIEM CHOT (e2e tren pg-mem)
 import * as crypto from 'crypto';
 import { DataSource } from 'typeorm';
@@ -72,5 +74,27 @@ describe('F13 - chot doi soat giua ky (e2e)', () => {
 
     expect(ids).toContain(used.id);
     expect(ids).not.toContain(stillRefundable.id);
+  });
+
+  it('don thanh toan sau ky khong vao phieu cua ky dang chot', async () => {
+    const now = Date.now();
+    const c = await ds.getRepository(VoucherCampaign).save({
+      brandId: ID.brand, title: 'Doi soat sau ky', voucherType: VoucherType.PREPAID, salePrice: 40000, faceValue: 50000,
+      totalQuantity: 10, soldQuantity: 0, reservedQuantity: 0, limitPerUser: 5,
+      saleStartAt: new Date(now - DAY), saleEndAt: new Date(now + 30 * DAY), voucherExpireAt: new Date(now + 90 * DAY),
+      status: CampaignStatus.PUBLISHED,
+    });
+    await ds.getRepository(CampaignStore).save({ campaignId: c.id, storeId: ID.store1 });
+    const res = await t.http.post('/api/orders').set({ Authorization: `Bearer ${customer}` }).send({ campaignId: c.id, quantity: 1 }).expect(201);
+    const order = res.body.data.order;
+    const p = { orderId: order.id, gatewayTxnId: `T-${crypto.randomUUID()}`, amount: Number(order.totalAmount), status: 'SUCCESS' };
+    await t.http.post('/api/orders/payment-webhook').send({ ...p, signature: signWebhook(p) }).expect(200);
+    const [item] = await ds.getRepository(VoucherItem).find({ where: { orderId: order.id } });
+    await ds.getRepository(VoucherItem).update(item.id, { status: VoucherItemStatus.USED, usedAt: new Date() });
+    const service = t.app.get(SettlementService);
+    await service.runMonthlySettlement(new Date(now - 60 * DAY), new Date(now - 30 * DAY));
+    expect(await ds.getRepository(SettlementItem).count({ where: { voucherItemId: item.id } })).toBe(0);
+    await service.runMonthlySettlement(new Date(now - 30 * DAY), new Date(now + DAY));
+    expect(await ds.getRepository(SettlementItem).count({ where: { voucherItemId: item.id } })).toBe(1);
   });
 });
