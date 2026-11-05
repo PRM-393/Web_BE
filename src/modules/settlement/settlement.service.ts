@@ -127,6 +127,8 @@ export class SettlementService {
         .innerJoin(VoucherCampaign, 'c', 'c.id = v.campaignId')
         .where('c.brandId = :brandId', { brandId: brand.id })
         .andWhere('o.status = :fulfilled', { fulfilled: OrderStatus.FULFILLED })
+        // Don thanh toan sau ky khong thuoc ky nay (se vao phieu ky sau)
+        .andWhere('o.paidAt <= :periodEnd', { periodEnd })
         .andWhere('v.status IN (:...statuses)', {
           statuses: [VoucherItemStatus.ACTIVE, VoucherItemStatus.USED, VoucherItemStatus.EXPIRED],
         })

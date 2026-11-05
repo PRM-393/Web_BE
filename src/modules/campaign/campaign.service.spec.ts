@@ -27,7 +27,6 @@ function campaignOf(overrides: Partial<VoucherCampaign> = {}): VoucherCampaign {
     discountType: DiscountType.PERCENT,
     discountValue: 20,
     maxDiscount: 15000,
-    comboItems: null,
     salePrice: 10000,
     faceValue: 50000,
     totalQuantity: 100,
@@ -188,7 +187,7 @@ describe('FR-CAMP-12 - truong gia tri theo loai voucher', () => {
 
   it('tu choi loai COMBO', () => {
     expect(() =>
-      validateValueFields({ voucherType: VoucherType.COMBO, salePrice: 45000, faceValue: 59000 }),
+      validateValueFields({ voucherType: 'COMBO' as VoucherType, salePrice: 45000, faceValue: 59000 }),
     ).toThrow(BadRequestException);
   });
 });

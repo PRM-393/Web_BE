@@ -150,7 +150,7 @@ describe('Web_BE e2e (pg-mem)', () => {
     expect(plain.body.data.total).toBeGreaterThan(0);
     expect(plain.body.data.items.map((c: { id: string }) => c.id)).toEqual(accented.body.data.items.map((c: { id: string }) => c.id));
     const dong = await http.get('/api/vouchers').query({ keyword: 'tra sua' }).expect(200);
-    expect(dong.body.data.items.some((c: { title: string }) => c.title.includes('Trà sữa'))).toBe(true);
+    expect(dong.body.data.items.some((c: { title: string }) => c.title.toLowerCase().includes('trà sữa'))).toBe(true);
   });
 
   it('vi cua khach khong lo secretKey (NFR-SEC-05)', async () => {

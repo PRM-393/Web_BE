@@ -59,6 +59,5 @@ describe('usageBlock: voucher co dung duoc khong', () => {
     expect(billRequired(VoucherType.PREPAID, undefined)).toBe(true);
     expect(billRequired(VoucherType.PREPAID, 0)).toBe(false);
     expect(billRequired(VoucherType.DISCOUNT, undefined)).toBe(false);
-    expect(billRequired(VoucherType.COMBO, null)).toBe(false);
   });
 });

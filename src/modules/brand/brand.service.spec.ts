@@ -59,7 +59,7 @@ function buildService(fixture: Fixture = {}) {
   } as unknown as Repository<VoucherItem>;
 
   const campaignRepo = {
-    find: jest.fn().mockResolvedValue(fixture.campaigns ?? [{ title: 'Combo trua' }]),
+    find: jest.fn().mockResolvedValue(fixture.campaigns ?? [{ title: 'Voucher trua' }]),
   } as unknown as Repository<VoucherCampaign>;
 
   const staffRepo = {
@@ -151,7 +151,7 @@ describe('BR-24 / FR-BRAND-08 - khong vo hieu chi nhanh ap dung cuoi cung', () =
   const blocking: Fixture = {
     links: linkToStore1,
     vouchers: [{ campaignId: 'camp-1' }],
-    campaigns: [{ title: 'Combo trua' } as VoucherCampaign],
+    campaigns: [{ title: 'Voucher trua' } as VoucherCampaign],
   };
 
   it('chan khi la chi nhanh cuoi cung cua chien dich con voucher dung duoc', async () => {
@@ -162,7 +162,7 @@ describe('BR-24 / FR-BRAND-08 - khong vo hieu chi nhanh ap dung cuoi cung', () =
 
   it('thong bao neu ro ten chien dich va viec can lam tiep', async () => {
     const { service } = buildService(blocking);
-    await expect(service.deactivateStore('store-1')).rejects.toThrow(/Combo trua[\s\S]*chi nhánh áp dụng khác/);
+    await expect(service.deactivateStore('store-1')).rejects.toThrow(/Voucher trua[\s\S]*chi nhánh áp dụng khác/);
   });
 
   it('cho vo hieu khi chien dich con chi nhanh ap dung khac dang hoat dong', async () => {
@@ -184,7 +184,7 @@ describe('BR-24 / FR-BRAND-08 - khong vo hieu chi nhanh ap dung cuoi cung', () =
         { campaignId: 'camp-1', storeId: 'store-2', store: storeOf({ id: 'store-2', status: false }) },
       ],
       vouchers: [{ campaignId: 'camp-1' }],
-      campaigns: [{ title: 'Combo trua' } as VoucherCampaign],
+      campaigns: [{ title: 'Voucher trua' } as VoucherCampaign],
     });
     await expect(service.deactivateStore('store-1')).rejects.toThrow(BadRequestException);
   });
