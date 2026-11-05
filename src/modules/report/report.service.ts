@@ -8,8 +8,9 @@ import { Brand } from '../../entities/brand.entity';
 import { Payment } from '../../entities/payment.entity';
 import { PaymentRefund } from '../../entities/payment-refund.entity';
 import { AuditLog } from '../../entities/audit-log.entity';
-import { PaymentStatus, PaymentRefundMode, PaymentRefundReason, PaymentRefundStatus } from '../../common/enums/status.enum';
+import { PaymentStatus, PaymentRefundMode, PaymentRefundReason, PaymentRefundStatus, SettlementStatus } from '../../common/enums/status.enum';
 import { Store } from '../../entities/store.entity';
+import { SettlementItem } from '../../entities/settlement-item.entity';
 import { RedemptionLog } from '../../entities/redemption-log.entity';
 import { CampaignStatus, VoucherItemStatus, BrandStatus, OrderStatus } from '../../common/enums/status.enum';
 import { ReportQueryDto } from './dto/report-query.dto';
@@ -41,6 +42,28 @@ export class ReportService {
     private readonly db: DataSource,
   ) {}
 
+  // Hoa hong tren voucher chua hoan, theo ty le da chot vao tung don (BR-09)
+  private commissionOf(items: VoucherItem[]) {
+    return items
+      .filter((v) => v.status !== VoucherItemStatus.REFUNDED)
+      .reduce((sum, v) => sum + Math.round(Number(v.order.unitPrice) * Number(v.order.commissionRate || 0)), 0);
+  }
+
+  // So tien thuc da chuyen cho thuong hieu: chi tinh dong doi soat thuoc phieu da chi tra.
+  // Loc cung tieu chi voi bao cao de cac chi so tren mot man hinh khop nhau.
+  private async paidToBrands(filter: { brandId?: string; campaignId?: string; storeId?: string; from?: Date; to?: Date }) {
+    const qb = this.db.getRepository(SettlementItem).createQueryBuilder('si')
+      .innerJoin('si.settlement', 's').innerJoin('si.voucherItem', 'v').innerJoin('si.order', 'o')
+      .where('s.status = :paid', { paid: SettlementStatus.PAID });
+    if (filter.brandId) qb.andWhere('s.brandId = :brandId', { brandId: filter.brandId });
+    if (filter.campaignId) qb.andWhere('v.campaignId = :campaignId', { campaignId: filter.campaignId });
+    if (filter.from) qb.andWhere('o.paidAt >= :from', { from: filter.from });
+    if (filter.to) qb.andWhere('o.paidAt <= :to', { to: filter.to });
+    if (filter.storeId) qb.innerJoin(RedemptionLog, 'log', 'log.voucherItemId = v.id AND log.storeId = :storeId', { storeId: filter.storeId });
+    const rows = await qb.getMany();
+    return rows.reduce((sum, r) => sum + Number(r.amount) - Number(r.commissionAmount), 0);
+  }
+
   async brandReport(userId: string, brandId: string, query: ReportQueryDto = {}) {
     const brand = await this.brandRepo.findOne({ where: { id: brandId } });
     if (!brand) throw new NotFoundException('Không tìm thấy thương hiệu.');
@@ -66,9 +89,14 @@ export class ReportService {
     const refundedAmount = items.filter(v => v.status === VoucherItemStatus.REFUNDED).reduce((sum, v) => sum + Number(v.order.unitPrice), 0);
     const campaigns = this.campaignRepo.createQueryBuilder('c').where('c.brandId = :brandId', { brandId });
     if (query.campaignId) campaigns.andWhere('c.id = :id', { id: query.campaignId });
+    const totalRevenue = grossRevenue - refundedAmount;
+    const totalCommission = this.commissionOf(items);
+    const brandPayable = totalRevenue - totalCommission;
+    const brandPaid = await this.paidToBrands({ brandId, campaignId: query.campaignId, storeId: query.storeId, from, to });
     return {
       totalCampaigns: await campaigns.getCount(), totalVoucherSold: items.length,
-      grossRevenue, refundedAmount, totalRevenue: grossRevenue - refundedAmount,
+      grossRevenue, refundedAmount, totalRevenue, totalCommission, brandPayable, brandPaid,
+      brandUnpaid: Math.max(0, brandPayable - brandPaid),
       totalVoucherUsed: used, totalVoucherExpired: expired, totalVoucherRefunded: refunded,
       usageRate: items.length - refunded > 0 ? used / (items.length - refunded) * 100 : 0,
       dateBasis: 'paidAt', branchBasis: query.storeId ? 'redeemedAtStore' : null,
@@ -99,9 +127,13 @@ export class ReportService {
       row.revenue += Number(o.totalAmount) - Number(o.refundedAmount);
       byDate.set(date, row);
     }
+    const totalRevenue = grossRevenue - refundedAmount;
+    const totalCommission = this.commissionOf(commissionItems);
+    const brandPayable = totalRevenue - totalCommission;
+    const brandPaid = await this.paidToBrands({ from, to });
     return {
-      grossRevenue, refundedAmount, totalRevenue: grossRevenue - refundedAmount,
-      totalCommission: commissionItems.reduce((sum, v) => sum + Math.round(Number(v.order.unitPrice) * Number(v.order.commissionRate || 0)), 0),
+      grossRevenue, refundedAmount, totalRevenue, totalCommission, brandPayable, brandPaid,
+      brandUnpaid: Math.max(0, brandPayable - brandPaid),
       totalActiveBrands: await this.brandRepo.count({ where: { status: BrandStatus.APPROVED } }),
       totalTransactions: orders.length,
       transactionsByDay: [...byDate.values()].sort((a,b) => a.date.localeCompare(b.date)),

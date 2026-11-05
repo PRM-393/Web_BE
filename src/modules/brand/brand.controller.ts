@@ -1,3 +1,5 @@
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { RegisterBrandDto } from './dto/register-brand.dto';
 import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { BrandService } from './brand.service';
@@ -17,6 +19,15 @@ import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current
 @Controller('brands')
 export class BrandController {
   constructor(private readonly brandService: BrandService) {}
+
+  // FR-BRAND-01/02: dang ky cong khai, chua co tai khoan. Tao chu thuong hieu PENDING_ACTIVATION +
+  // ho so PENDING roi gui lien ket dat mat khau. Gioi han theo IP de chong tao ho so rac va do email.
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Post('register')
+  register(@Body() dto: RegisterBrandDto) {
+    return this.brandService.registerBrand(dto);
+  }
 
   @UseGuards(JwtAuthGuard, RolesGuard, BrandResourceGuard)
   @Roles(Role.BRAND_OWNER)
