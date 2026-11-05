@@ -46,6 +46,21 @@ export class OrderController {
     return this.orderService.findMyOrders(user.userId);
   }
 
+  // Phai khai bao truoc orders/:id, neu khong route nay bi orders/:id (can dang nhap) bat mat va tra 401
+  // Trang payOS chuyen khach ve (returnUrl / cancelUrl): dua khach quay lai app (deep link voucherplatform://),
+  // chi hien thong bao; ket qua that lay tu webhook / truy van payOS (FR-ORDER-05)
+  @Get('orders/payment-return')
+  @RawResponse()
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  paymentReturn(@Query() query: Record<string, string>) {
+    const paid = query.status === 'PAID' && query.cancel !== 'true';
+    const text = paid
+      ? 'Đã nhận thanh toán. Vui lòng quay lại ứng dụng để xem voucher trong ví.'
+      : 'Thanh toán chưa hoàn tất. Bạn có thể quay lại ứng dụng để thanh toán lại trong thời gian giữ chỗ.';
+    const appLink = 'voucherplatform://payment-return';
+    return `<!doctype html><html lang="vi"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Voucher Platform</title><body style="font-family:sans-serif;padding:32px;text-align:center"><h2>${text}</h2><p><a href="${appLink}" style="display:inline-block;padding:14px 28px;background:#0a7f6c;color:#fff;border-radius:12px;text-decoration:none;font-weight:700">Quay lại ứng dụng</a></p><script>location.href='${appLink}'</script></body></html>`;
+  }
+
   // FR-ORDER-05: man ket qua tren app hoi trang thai don tu may chu
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -82,18 +97,6 @@ export class OrderController {
     if (!result) return { success: false, message: 'Invalid signature' };
     const outcome = await this.orderService.handlePayosWebhook(result);
     return { success: true, outcome };
-  }
-
-  // Trang payOS chuyen khach ve (returnUrl / cancelUrl): chi bao quay lai app; ket qua that lay tu webhook (FR-ORDER-05)
-  @Get('orders/payment-return')
-  @RawResponse()
-  @Header('Content-Type', 'text/html; charset=utf-8')
-  paymentReturn(@Query() query: Record<string, string>) {
-    const paid = query.status === 'PAID' && query.cancel !== 'true';
-    const text = paid
-      ? 'Đã nhận thanh toán. Vui lòng quay lại ứng dụng để xem voucher trong ví.'
-      : 'Thanh toán chưa hoàn tất. Bạn có thể quay lại ứng dụng để thanh toán lại trong thời gian giữ chỗ.';
-    return `<!doctype html><html lang="vi"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Voucher Platform</title><body style="font-family:sans-serif;padding:32px;text-align:center"><h2>${text}</h2></body></html>`;
   }
 
   // Che do gia lap thanh toan cho demo / test khi chua co khoa payOS. Bat bang PAYMENT_SIMULATOR=true.

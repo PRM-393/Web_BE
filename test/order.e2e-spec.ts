@@ -265,6 +265,12 @@ describe('F09 - mua va thanh toan (e2e)', () => {
     }
   });
 
+  it('trang payOS chuyen khach ve mo duoc khi chua dang nhap va co link quay lai app', async () => {
+    const res = await t.http.get('/api/orders/payment-return').query({ status: 'PAID', cancel: 'false' }).expect(200);
+    expect(res.headers['content-type']).toContain('text/html');
+    expect(res.text).toContain('voucherplatform://payment-return');
+  });
+
   it('webhook payOS: chu ky sai bi bo qua, orderCode la (payOS gui thu) tra 200', async () => {
     const bad = await t.http.post('/api/orders/payos-webhook').send({ code: '00', data: { orderCode: 123 }, signature: 'x' }).expect(200);
     expect(bad.body.success).toBe(false);
