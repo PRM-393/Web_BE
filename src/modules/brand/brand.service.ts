@@ -1,3 +1,5 @@
+import { Logger } from '@nestjs/common';
+import { RegisterBrandDto } from './dto/register-brand.dto';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, MoreThan, Repository } from 'typeorm';
@@ -32,6 +34,8 @@ export function assertStoreCoordinates(store: { status?: boolean; latitude?: num
 
 @Injectable()
 export class BrandService {
+  private readonly logger = new Logger(BrandService.name);
+
   constructor(
     @InjectRepository(Brand) private readonly brandRepo: Repository<Brand>,
     @InjectRepository(Store) private readonly storeRepo: Repository<Store>,
@@ -46,6 +50,54 @@ export class BrandService {
   ) {}
 
   // FR-BRAND-01/02: ho so moi o trang thai cho duyet
+  // FR-BRAND-01/02: doanh nghiep tu dang ky khi chua co tai khoan
+  async registerBrand(dto: RegisterBrandDto) {
+    const email = dto.ownerEmail.trim().toLowerCase();
+    const { ownerEmail, ownerFullName, ownerPhone, ...brandFields } = dto;
+
+    let user = await this.userRepo.findOne({ where: { email } });
+    if (user && user.role !== Role.BRAND_OWNER) {
+      throw new BadRequestException('Email đã thuộc tài khoản có vai trò khác.');
+    }
+    if (user) {
+      // Duong cong khai khong xac thuc chu email: tai khoan da kich hoat phai dang nhap roi moi tao ho so,
+      // neu khong ai biet email cung gan duoc thuong hieu vao tai khoan cua nguoi khac.
+      if (user.status !== UserStatus.PENDING_ACTIVATION) {
+        throw new BadRequestException('Email này đã có tài khoản. Vui lòng đăng nhập để đăng ký thương hiệu.');
+      }
+      if (await this.brandRepo.findOne({ where: { ownerUserId: user.id } })) {
+        throw new BadRequestException('Email này đã đăng ký hồ sơ thương hiệu. Vui lòng kiểm tra email để đặt mật khẩu.');
+      }
+    } else {
+      user = await this.userRepo.save(
+        this.userRepo.create({
+          email,
+          fullName: ownerFullName.trim(),
+          phone: ownerPhone?.trim() || undefined,
+          role: Role.BRAND_OWNER,
+          status: UserStatus.PENDING_ACTIVATION,
+        }),
+      );
+    }
+
+    const brand = await this.brandRepo.save(
+      this.brandRepo.create({ ...brandFields, ownerUserId: user.id, status: BrandStatus.PENDING }),
+    );
+
+    // Gui mail that bai khong xoa ho so vua tao: nguoi dung yeu cau gui lai o man kich hoat tai khoan
+    try {
+      await this.authService.sendActivation(user.email);
+    } catch (error) {
+      this.logger.warn(`Khong gui duoc lien ket dat mat khau cho ${user.email}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    return {
+      brandId: brand.id,
+      status: brand.status,
+      message: 'Đã nhận hồ sơ thương hiệu. Vui lòng kiểm tra email để đặt mật khẩu. Hồ sơ sẽ được quản trị viên xét duyệt.',
+    };
+  }
+
   async createBrand(ownerUserId: string, dto: CreateBrandDto) {
     const brand = this.brandRepo.create({
       ...dto,

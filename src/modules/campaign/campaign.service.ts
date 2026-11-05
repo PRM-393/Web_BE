@@ -1,3 +1,6 @@
+import { Order } from '../../entities/order.entity';
+import { Favorite } from '../../entities/favorite.entity';
+import { FavoriteTargetType } from '../../common/enums/status.enum';
 import { BadRequestException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, LessThanOrEqual, MoreThan, Repository } from 'typeorm';
@@ -74,6 +77,12 @@ export function validateTimeline(fields: TimelineFields) {
 }
 
 // FR-CAMP-15: moi chinh sua tren chien dich o cac trang thai nay dua no ve PENDING cho duyet lai
+function sameFieldValue(current: unknown, next: unknown) {
+  if (current instanceof Date) return current.getTime() === new Date(next as string).getTime();
+  if (typeof next === 'number') return Number(current) === next;
+  return current === next;
+}
+
 const NEEDS_REAPPROVAL: CampaignStatus[] = [
   CampaignStatus.APPROVED,
   CampaignStatus.PUBLISHED,
@@ -239,6 +248,14 @@ export class CampaignService {
       );
     }
 
+    if (campaign.status === CampaignStatus.ENDED) {
+      throw new BadRequestException('Chiến dịch đã kết thúc, không thể sửa.');
+    }
+    // Khong duoc phat hanh it hon so da ban + dang giu cho, neu khong ton kho kha dung se am
+    if (dto.totalQuantity !== undefined && dto.totalQuantity < campaign.soldQuantity + campaign.reservedQuantity) {
+      throw new BadRequestException(`Số lượng phát hành không được nhỏ hơn ${campaign.soldQuantity + campaign.reservedQuantity} (đã bán và đang giữ chỗ).`);
+    }
+
     // BR-17: da ban duoc it nhat mot voucher thi khoa gia ban, cac truong gia tri, loai voucher va han su dung
     if (campaign.soldQuantity > 0) {
       const lockedFields: (keyof UpdateCampaignDto)[] = [
@@ -250,7 +267,8 @@ export class CampaignService {
         'discountValue',
       ];
       for (const field of lockedFields) {
-        if (dto[field] !== undefined) {
+        // Form sua gui lai ca bieu mau: chi tu choi khi gia tri thuc su doi
+        if (dto[field] !== undefined && !sameFieldValue(campaign[field], dto[field])) {
           throw new BadRequestException(
             'Khong the sua gia ban, cac truong gia tri, loai voucher hoac han su dung cua chien dich da ban duoc voucher (BR-17).',
           );
@@ -276,6 +294,24 @@ export class CampaignService {
     }
 
     return this.campaignRepo.save(campaign);
+  }
+
+  // Xoa han chien dich chua phat sinh don hang. Da co don thi phai giu lai de doi soat, hoan tien va tra cuu;
+  // khi do chu thuong hieu dung tam dung ban. Dang cho duyet thi rut ve nhap truoc (FR-CAMP-14).
+  async remove(id: string) {
+    await this.campaignRepo.manager.transaction(async (manager) => {
+      const campaign = await manager.findOne(VoucherCampaign, { where: { id }, lock: { mode: 'pessimistic_write' } });
+      if (!campaign) throw new NotFoundException('Không tìm thấy chiến dịch.');
+      if (campaign.status === CampaignStatus.PENDING) {
+        throw new BadRequestException('Chiến dịch đang chờ duyệt. Hãy rút về nháp trước khi xóa.');
+      }
+      if (campaign.soldQuantity > 0 || campaign.reservedQuantity > 0 || (await manager.count(Order, { where: { campaignId: id } })) > 0) {
+        throw new BadRequestException('Chiến dịch đã có đơn hàng nên không thể xóa. Bạn có thể tạm dừng bán.');
+      }
+      await manager.delete(Favorite, { targetType: FavoriteTargetType.CAMPAIGN, targetId: id });
+      await manager.delete(VoucherCampaign, id);
+    });
+    return { message: 'Đã xóa chiến dịch.' };
   }
 
   // FR-CAMP-11: ton kho con lai theo thoi gian thuc

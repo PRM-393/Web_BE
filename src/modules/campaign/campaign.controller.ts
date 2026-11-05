@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CampaignService } from './campaign.service';
 import { CreateCampaignDto } from './dto/create-campaign.dto';
@@ -33,6 +33,12 @@ export class CampaignController {
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateCampaignDto) {
     return this.campaignService.update(id, dto);
+  }
+
+  @Roles(Role.BRAND_OWNER)
+  @Delete(':id')
+  remove(@Param('id', ParseUUIDPipe) id: string) {
+    return this.campaignService.remove(id);
   }
 
   @Roles(Role.BRAND_OWNER)
