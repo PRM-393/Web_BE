@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -57,6 +58,19 @@ export class Order {
   // Lien ket thanh toan payOS, het han cung reservedUntil; dung lai khi khach bam thanh toan lai (FR-ORDER-12)
   @Column({ type: 'text', nullable: true })
   paymentUrl: string | null;
+
+  // Chuoi VietQR cua payOS: app ve ma QR ngay trong ung dung, khong can mo trinh duyet
+  @Column({ type: 'text', nullable: true })
+  paymentQr: string | null;
+
+  // Thanh toan gio hang: cac don chung mot ma payOS (orderCode) va mot QR tong
+  @Index()
+  @Column({ type: 'bigint', nullable: true })
+  paymentGroupCode: string | null;
+
+  // Tong tien cua ca nhom; null voi don mua rieng
+  @Column({ type: 'bigint', nullable: true })
+  paymentAmount: number | null;
 
   // giu cho ton kho toi da 15 phut - FR-ORDER-03, BR-02
   @Column({ type: DATETIME })

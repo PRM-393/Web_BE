@@ -15,7 +15,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { v4 as uuidv4 } from 'uuid';
 import { OrderService } from './order.service';
 import { RawResponse } from '../../common/interceptors/response-envelope.interceptor';
-import { CreateOrderDto } from './dto/create-order.dto';
+import { CreateCheckoutDto, CreateOrderDto } from './dto/create-order.dto';
 import { PaymentWebhookDto } from './dto/payment-webhook.dto';
 import { parsePayosWebhook } from './payment-gateway';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -36,6 +36,15 @@ export class OrderController {
   @Post('orders')
   create(@CurrentUser() user: CurrentUserPayload, @Body() dto: CreateOrderDto) {
     return this.orderService.createOrder(user.userId, dto);
+  }
+
+  // Thanh toan cac voucher da chon trong gio hang bang mot ma QR tong
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.CUSTOMER)
+  @Post('orders/checkout')
+  checkout(@CurrentUser() user: CurrentUserPayload, @Body() dto: CreateCheckoutDto) {
+    return this.orderService.createCheckout(user.userId, dto);
   }
 
   @ApiBearerAuth()

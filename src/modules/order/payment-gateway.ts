@@ -14,6 +14,8 @@ export interface PaymentResult {
   amount: number;
   success: boolean;
   raw: Record<string, unknown>;
+  // Thanh toan nhom lech tong tien: danh dau lech ke ca khi so tien vo tinh bang dung don nay
+  forceMismatch?: boolean;
 }
 
 export interface PayosWebhookResult {
@@ -73,7 +75,8 @@ export function payosCreateBody(o: { orderCode: string; amount: number; expiresA
 }
 
 // Tao link thanh toan. Chua cau hinh khoa payOS -> null (dung che do gia lap thanh toan de demo).
-export async function createPayosLink(o: { orderCode: string; amount: number; expiresAt: Date }): Promise<string | null> {
+// qrCode: chuoi VietQR de app tu ve ma ngay trong ung dung, khong can mo trinh duyet.
+export async function createPayosLink(o: { orderCode: string; amount: number; expiresAt: Date }): Promise<{ checkoutUrl: string; qrCode: string | null } | null> {
   if (!payosConfigured()) return null;
   const res = await fetch(`${env('PAYOS_API_URL', 'https://api-merchant.payos.vn')}/v2/payment-requests`, {
     method: 'POST',
@@ -84,11 +87,11 @@ export async function createPayosLink(o: { orderCode: string; amount: number; ex
     },
     body: JSON.stringify(payosCreateBody(o)),
   });
-  const json = (await res.json().catch(() => ({}))) as { code?: string; desc?: string; data?: { checkoutUrl?: string } };
+  const json = (await res.json().catch(() => ({}))) as { code?: string; desc?: string; data?: { checkoutUrl?: string; qrCode?: string } };
   if (json.code !== '00' || !json.data?.checkoutUrl) {
     throw new Error(`payOS: ${json.desc || res.status}`);
   }
-  return json.data.checkoutUrl;
+  return { checkoutUrl: json.data.checkoutUrl, qrCode: json.data.qrCode || null };
 }
 
 // Hoi payOS trang thai link thanh toan: GET {PAYOS_API_URL}/v2/payment-requests/{orderCode}.
