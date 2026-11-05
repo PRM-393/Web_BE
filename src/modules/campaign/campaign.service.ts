@@ -113,7 +113,6 @@ export class CampaignService {
       discountType: dto.discountType ?? null,
       discountValue: dto.discountValue ?? null,
       maxDiscount: dto.maxDiscount ?? null,
-      comboItems: null,
       totalQuantity: dto.totalQuantity,
       limitPerUser: dto.limitPerUser ?? 5,
       saleStartAt: new Date(dto.saleStartAt),

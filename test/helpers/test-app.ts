@@ -75,6 +75,8 @@ export interface TestApp {
 }
 
 export async function createTestApp(beforeInit?: (app: INestApplication, emails: SentMail[]) => void): Promise<TestApp> {
+  // Test goi lien tuc tu mot IP; rieng test gioi han tan suat tu bat lai
+  process.env.THROTTLE_DISABLED = 'true';
   const dataSource = await createDataSource();
   const emails: SentMail[] = [];
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })

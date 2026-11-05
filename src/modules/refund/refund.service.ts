@@ -21,6 +21,8 @@ import { BusinessException } from '../../common/exceptions/business.exception';
 import { CreateRefundDto } from './dto/create-refund.dto';
 import { NotificationService } from '../notification/notification.service';
 import { RefundGateway, RefundGatewayResult } from './refund-gateway';
+import { payosConfigured } from '../order/payment-gateway';
+import { User } from '../../entities/user.entity';
 import { OPEN_REFUND_STATUSES, refundEligibility, statusAfterFailedRefund } from './refund.rules';
 
 export const REFUND_STATUS_LABELS: Record<RefundRequestStatus, string> = {
@@ -105,8 +107,9 @@ export class RefundService {
       );
     });
 
-    // REFUND_MODE=manual: khong goi cong, quan tri vien hoan tay roi xac nhan (UC-07)
-    if ((process.env.REFUND_MODE || 'auto').toLowerCase() === 'manual') {
+    // REFUND_MODE=manual: khong goi cong, quan tri vien hoan tay roi xac nhan (UC-07).
+    // Da nhan tien that qua payOS (khong co API hoan tien) thi luon hoan tay: khong bao "thanh cong" khi tien chua ve.
+    if ((process.env.REFUND_MODE || 'auto').toLowerCase() === 'manual' || payosConfigured()) {
       await this.toManualPending(refund.id);
     } else {
       await this.callGateway(refund.id);
@@ -310,6 +313,73 @@ export class RefundService {
     const refund = await this.refundRepo.findOne({ where: { id } });
     if (refund) await this.notifyResult(refund);
     return { message: 'Đã ghi nhận không hoàn được tiền, voucher đã được khôi phục cho khách.' };
+  }
+
+  // ================= BR-11 / DC-11: tien khach da tra nhung don khong phat hanh duoc (het hang, tra trung) =================
+
+  async findPendingPaymentRefunds() {
+    const refunds = await this.dataSource.getRepository(PaymentRefund).find({
+      where: { status: PaymentRefundStatus.PROCESSING, mode: PaymentRefundMode.MANUAL, reasonType: In([PaymentRefundReason.OVERSOLD, PaymentRefundReason.MISMATCH]) },
+      order: { createdAt: 'ASC' },
+    });
+    const payments = await this.dataSource.getRepository(Payment).find({ where: { id: In(refunds.map((p) => p.paymentId)) } });
+    const orders = await this.dataSource.getRepository(Order).find({
+      where: { id: In(payments.map((p) => p.orderId)) },
+      relations: ['campaign', 'user'],
+    });
+    return refunds.map((refund) => {
+      const payment = payments.find((p) => p.id === refund.paymentId);
+      const order = orders.find((o) => o.id === payment?.orderId);
+      const user: User | undefined = order?.user;
+      return {
+        id: refund.id,
+        amount: Number(refund.amount),
+        reasonType: refund.reasonType,
+        createdAt: refund.createdAt,
+        orderId: order?.id ?? null,
+        campaignTitle: order?.campaign?.title ?? null,
+        gatewayTxnId: payment?.gatewayTxnId ?? null,
+        customer: user ? { id: user.id, email: user.email, fullName: user.fullName ?? null, phone: user.phone ?? null } : null,
+      };
+    });
+  }
+
+  async confirmPaymentRefund(id: string, actorUserId: string, gatewayRefundId: string) {
+    const order = await this.dataSource.transaction(async (manager) => {
+      const refund = await manager.findOne(PaymentRefund, { where: { id }, lock: { mode: 'pessimistic_write' } });
+      if (!refund || refund.status !== PaymentRefundStatus.PROCESSING || refund.mode !== PaymentRefundMode.MANUAL) {
+        throw new BadRequestException('Khoản này không còn chờ hoàn tiền.');
+      }
+      const payment = await manager.findOneOrFail(Payment, { where: { id: refund.paymentId } });
+      const locked = await manager.findOneOrFail(Order, { where: { id: payment.orderId }, lock: { mode: 'pessimistic_write' } });
+      if ((await this.completedRefundTotal(manager, payment.id)) + Number(refund.amount) > Number(payment.amount)) {
+        throw new BadRequestException('Số tiền hoàn vượt giao dịch đã nhận.');
+      }
+      refund.status = PaymentRefundStatus.COMPLETED;
+      refund.gatewayRefundId = gatewayRefundId.trim();
+      refund.processedBy = actorUserId;
+      refund.completedAt = new Date();
+      await manager.save(refund);
+      locked.refundedAmount = Number(locked.refundedAmount) + Number(refund.amount);
+      await manager.save(locked);
+      await manager.save(
+        AuditLog,
+        manager.create(AuditLog, {
+          actorUserId,
+          action: 'CONFIRM_PAYMENT_REFUND',
+          entityType: 'PaymentRefund',
+          entityId: id,
+          detail: { orderId: locked.id, reasonType: refund.reasonType },
+        }),
+      );
+      return locked;
+    });
+    try {
+      await this.notifications.refundResult(order.userId, id, 'COMPLETED', 'Khoản tiền của bạn đã được hoàn lại, tiền sẽ về tài khoản đã thanh toán.');
+    } catch {
+      // thong bao la phu
+    }
+    return { message: 'Đã ghi nhận hoàn tiền thủ công.' };
   }
 
   // ================= Danh sach =================

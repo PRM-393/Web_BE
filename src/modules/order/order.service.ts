@@ -8,7 +8,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, LessThan, Repository } from 'typeorm';
+import { DataSource, EntityManager, LessThan, Not, Repository } from 'typeorm';
 import * as crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { Order } from '../../entities/order.entity';
@@ -44,6 +44,7 @@ export type PaymentOutcome =
   | 'IGNORED';
 
 const RESERVATION_MINUTES = () => parseInt(process.env.ORDER_RESERVATION_TTL_MINUTES || '15', 10);
+const PAYOS_RECHECK_MS = 60 * 60 * 1000;
 
 @Injectable()
 export class OrderService {
@@ -75,7 +76,7 @@ export class OrderService {
       }
 
       // BR-01: da mua (moi voucher da phat hanh) + don PENDING + so dat <= gioi han
-      const issued = await manager.count(VoucherItem, { where: { userId, campaignId: campaign.id } });
+      const issued = await this.countedVouchers(manager, userId, campaign.id);
       const pending = await manager.find(Order, { where: { userId, campaignId: campaign.id, status: OrderStatus.PENDING } });
       const quota = remainingPurchaseQuota(campaign.limitPerUser, issued, pending.reduce((s, o) => s + o.quantity, 0));
       if (dto.quantity > quota) {
@@ -175,25 +176,46 @@ export class OrderService {
     if (Date.now() - last < 4000) return order;
     this.lastPayosSync.set(order.id, Date.now());
     try {
-      const info = await fetchPayosPayment(String(order.paymentOrderCode));
-      if (info?.status === 'PAID') {
-        await this.processPayment({
-          orderId: order.id,
-          gatewayTxnId: `PAYOS-${info.reference ?? order.paymentOrderCode}`,
-          amount: info.amountPaid,
-          success: true,
-          raw: info.raw,
-        });
-      } else if (info?.status === 'CANCELLED') {
-        await this.processPayment({
-          orderId: order.id, gatewayTxnId: `PAYOS-CANCEL-${order.paymentOrderCode}`, amount: 0, success: false, raw: info.raw,
-        });
-      } else return order;
+      if (!(await this.applyPayosStatus(order))) return order;
       this.lastPayosSync.delete(order.id);
       return this.findMyOrder(userId, orderId);
     } catch (e) {
       this.logger.warn(`Khong hoi duoc trang thai payOS cho don ${order.id}: ${(e as Error).message}`);
       return order;
+    }
+  }
+
+  // Ghi nhan ket qua that tu payOS; tra ve true neu payOS da co ket qua cuoi (da tra tien / khach huy)
+  private async applyPayosStatus(order: Order): Promise<boolean> {
+    const info = await fetchPayosPayment(String(order.paymentOrderCode));
+    if (info?.status === 'PAID') {
+      await this.processPayment({
+        orderId: order.id,
+        gatewayTxnId: `PAYOS-${info.reference ?? order.paymentOrderCode}`,
+        amount: info.amountPaid,
+        success: true,
+        raw: info.raw,
+      });
+      return true;
+    }
+    if (info?.status === 'CANCELLED') {
+      await this.processPayment({
+        orderId: order.id, gatewayTxnId: `PAYOS-CANCEL-${order.paymentOrderCode}`, amount: 0, success: false, raw: info.raw,
+      });
+      return true;
+    }
+    return false;
+  }
+
+  // Truoc khi huy don het han: khach co the da tra tien ma webhook khong toi. Chua hoi duoc payOS thi de lan chay sau,
+  // nhung qua 1 gio van huy de khong giu ton kho mai (tien den muon van xu ly theo BR-11).
+  private async paidOrCancelledOnPayos(order: Order, now: Date): Promise<boolean> {
+    if (!order.paymentUrl || !payosConfigured()) return false;
+    try {
+      return await this.applyPayosStatus(order);
+    } catch (e) {
+      this.logger.warn(`Khong hoi duoc payOS truoc khi huy don ${order.id}: ${(e as Error).message}`);
+      return now.getTime() - new Date(order.reservedUntil).getTime() < PAYOS_RECHECK_MS;
     }
   }
 
@@ -231,7 +253,7 @@ export class OrderService {
         order.userId,
         order.id,
         'REFUNDED_OVERSOLD',
-        `"${title}" đã hết khi thanh toán của bạn đến. Bạn được hoàn 100% số tiền.`,
+        `"${title}" đã hết khi thanh toán của bạn đến. Bạn sẽ được hoàn 100% số tiền đã trả.`,
       );
     } else {
       await this.notifications.vouchersIssued(order.userId, order.id, title, order.quantity);
@@ -292,7 +314,7 @@ export class OrderService {
       // BR-11: thanh toan thanh cong den muon khi don da huy
       if (order.status === OrderStatus.CANCELLED) {
         const campaign = await this.lockCampaign(manager, order.campaignId);
-        const issued = await manager.count(VoucherItem, { where: { userId: order.userId, campaignId: campaign.id } });
+        const issued = await this.countedVouchers(manager, order.userId, campaign.id);
         const pending = await manager.find(Order, {
           where: { userId: order.userId, campaignId: campaign.id, status: OrderStatus.PENDING },
         });
@@ -359,19 +381,26 @@ export class OrderService {
     await manager.save(campaign);
   }
 
-  // Hoan 100% so tien cua giao dich (BR-11 / DC-11). Goi API hoan tien that cua cong la TODO (ASM-02).
+  // Hoan 100% so tien cua giao dich (BR-11 / DC-11). payOS khong co API hoan tien: tien that thi tao khoan cho
+  // hoan (PROCESSING) trong hang doi quan tri vien; khong co cong that (demo / test) thi ghi hoan ngay.
   private async refundFull(manager: EntityManager, payment: Payment, reason: PaymentRefundReason) {
+    const manual = payosConfigured();
     await manager.save(
       manager.create(PaymentRefund, {
         paymentId: payment.id,
         amount: Number(payment.amount),
         reasonType: reason,
-        mode: PaymentRefundMode.AUTO,
-        status: PaymentRefundStatus.COMPLETED,
-        gatewayRefundId: `RF-${Date.now()}`,
-        completedAt: new Date(),
+        mode: manual ? PaymentRefundMode.MANUAL : PaymentRefundMode.AUTO,
+        status: manual ? PaymentRefundStatus.PROCESSING : PaymentRefundStatus.COMPLETED,
+        gatewayRefundId: manual ? null : `RF-${Date.now()}`,
+        completedAt: manual ? null : new Date(),
       }),
     );
+  }
+
+  // BR-01: voucher da hoan tien khong con tinh vao gioi han mua, khach duoc mua lai
+  private countedVouchers(manager: EntityManager, userId: string, campaignId: string) {
+    return manager.count(VoucherItem, { where: { userId, campaignId, status: Not(VoucherItemStatus.REFUNDED) } });
   }
 
   // UPDATE ... SET reservedQuantity = reservedQuantity + q WHERE con du ton kho; tra ve true neu cap nhat duoc
@@ -424,6 +453,7 @@ export class OrderService {
     const expired = await this.orderRepo.find({ where: { status: OrderStatus.PENDING, reservedUntil: LessThan(now) } });
     let cancelled = 0;
     for (const stale of expired) {
+      if (await this.paidOrCancelledOnPayos(stale, now)) continue;
       await this.dataSource.transaction(async (manager) => {
         const order = await manager
           .createQueryBuilder(Order, 'o')

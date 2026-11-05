@@ -53,9 +53,9 @@ services:
       # F10/F11: khoa ky ma QR redeem do Render tu sinh, khong nam trong repo
       - key: REDEEM_HMAC_SECRET
         generateValue: true
-      # F12: auto = goi cong hoan (dang dung cong gia lap sandbox), manual = vao hang doi quan tri
+      # F12: payOS khong co API hoan tien nen hoan tay: yeu cau vao hang doi, quan tri vien chuyen khoan roi xac nhan
       - key: REFUND_MODE
-        value: auto
+        value: manual
       - key: REFUND_SANDBOX_RESULT
         value: success
       # Email (ma dat lai mat khau): Render goi mien phi chan SMTP nen gui qua API Brevo.
